@@ -65,6 +65,8 @@ def create_tables():
 
         CREATE TABLE IF NOT EXISTS saved_companies (
             employer_name TEXT PRIMARY KEY,
+            status TEXT DEFAULT 'Interested',
+            role TEXT DEFAULT '',
             saved_at TEXT
         );
     """)

@@ -2,3 +2,4 @@
 h1b.db
 __pycache__/
 *.pyc
+data/*.xlsx
