@@ -167,9 +167,9 @@ SELECT
     COUNT(*) AS "Total LCAs",
     COUNT(DISTINCT job_title) AS "Unique Roles",
     COUNT(DISTINCT worksite_state) AS "Worksite States",
-    ROUND(MIN(annual_wage_from), 0) AS "Min Salary",
-    ROUND(AVG(annual_wage_from), 0) AS "Median Salary",
-    ROUND(MAX(annual_wage_from), 0) AS "Max Salary",
+    ROUND(MIN(annual_wage_from)::numeric, 0) AS "Min Salary",
+    ROUND(AVG(annual_wage_from)::numeric, 0) AS "Median Salary",
+    ROUND(MAX(annual_wage_from)::numeric, 0) AS "Max Salary",
     STRING_AGG(DISTINCT pw_wage_level, ',') AS "Wage Levels",
     STRING_AGG(DISTINCT CAST(fiscal_year AS TEXT), ',') AS "Years"
 FROM lca_records
@@ -485,8 +485,8 @@ with tab_saved:
                 career_url = "https://www.google.com/search?q=" + urllib.parse.quote(company_name + " careers")
 
             stats = query_df(
-                "SELECT COUNT(*) AS total, ROUND(MIN(annual_wage_from),0) AS min_sal, "
-                "ROUND(AVG(annual_wage_from),0) AS avg_sal, ROUND(MAX(annual_wage_from),0) AS max_sal "
+                "SELECT COUNT(*) AS total, ROUND(MIN(annual_wage_from)::numeric,0) AS min_sal, "
+                "ROUND(AVG(annual_wage_from)::numeric,0) AS avg_sal, ROUND(MAX(annual_wage_from)::numeric,0) AS max_sal "
                 "FROM lca_records WHERE employer_name = %s",
                 (company_name,),
             )
