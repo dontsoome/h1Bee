@@ -14,8 +14,12 @@ sys.path.insert(0, os.path.dirname(__file__))
 if "DATABASE_URL" not in os.environ:
     try:
         os.environ["DATABASE_URL"] = st.secrets["DATABASE_URL"]
-    except Exception:
-        pass
+    except KeyError:
+        st.error("DATABASE_URL not found in Streamlit secrets. Go to Settings → Secrets and add it.")
+        st.stop()
+    except Exception as e:
+        st.error(f"Error reading Streamlit secrets: {e}")
+        st.stop()
 
 from db import get_connection, query_df, get_distinct_values
 from filters import build_where_clause
