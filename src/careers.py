@@ -66,7 +66,7 @@ def save_results(results: dict[str, str]):
     conn = get_connection()
     now = datetime.now(timezone.utc).isoformat()
     conn.executemany(
-        "INSERT OR REPLACE INTO career_urls (employer_name, career_url, looked_up_at) VALUES (?, ?, ?)",
+        "INSERT INTO career_urls (employer_name, career_url, looked_up_at) VALUES (%s, %s, %s) ON CONFLICT (employer_name) DO UPDATE SET career_url=EXCLUDED.career_url, looked_up_at=EXCLUDED.looked_up_at",
         [(name, url, now) for name, url in results.items()],
     )
     conn.commit()

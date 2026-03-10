@@ -24,13 +24,13 @@ def build_where_clause(filters: dict) -> tuple[str, list]:
 
     # Multi-select: states
     if filters.get("states"):
-        placeholders = ", ".join(["?"] * len(filters["states"]))
+        placeholders = ", ".join(["%s"] * len(filters["states"]))
         clauses.append(f"worksite_state IN ({placeholders})")
         params.extend(filters["states"])
 
     # Text contains: city
     if filters.get("city"):
-        clauses.append("worksite_city LIKE ?")
+        clauses.append("worksite_city LIKE %s")
         params.append(f"%{filters['city'].upper()}%")
 
     # Text contains with OR for multiple keywords: job_title
@@ -39,51 +39,51 @@ def build_where_clause(filters: dict) -> tuple[str, list]:
         if keywords:
             kw_clauses = []
             for kw in keywords:
-                kw_clauses.append("job_title LIKE ?")
+                kw_clauses.append("job_title LIKE %s")
                 params.append(f"%{kw.upper()}%")
             clauses.append(f"({' OR '.join(kw_clauses)})")
 
     # Multi-select: soc_codes
     if filters.get("soc_codes"):
-        placeholders = ", ".join(["?"] * len(filters["soc_codes"]))
+        placeholders = ", ".join(["%s"] * len(filters["soc_codes"]))
         clauses.append(f"soc_code IN ({placeholders})")
         params.extend(filters["soc_codes"])
 
     # Multi-select: soc_titles
     if filters.get("soc_titles"):
-        placeholders = ", ".join(["?"] * len(filters["soc_titles"]))
+        placeholders = ", ".join(["%s"] * len(filters["soc_titles"]))
         clauses.append(f"soc_title IN ({placeholders})")
         params.extend(filters["soc_titles"])
 
     # Multi-select: wage_levels
     if filters.get("wage_levels"):
-        placeholders = ", ".join(["?"] * len(filters["wage_levels"]))
+        placeholders = ", ".join(["%s"] * len(filters["wage_levels"]))
         clauses.append(f"pw_wage_level IN ({placeholders})")
         params.extend(filters["wage_levels"])
 
     # Range: wage
     if filters.get("wage_min") is not None:
-        clauses.append("annual_wage_from >= ?")
+        clauses.append("annual_wage_from >= %s")
         params.append(filters["wage_min"])
     if filters.get("wage_max") is not None:
-        clauses.append("annual_wage_from <= ?")
+        clauses.append("annual_wage_from <= %s")
         params.append(filters["wage_max"])
 
     # Multi-select: fiscal_years
     if filters.get("fiscal_years"):
-        placeholders = ", ".join(["?"] * len(filters["fiscal_years"]))
+        placeholders = ", ".join(["%s"] * len(filters["fiscal_years"]))
         clauses.append(f"fiscal_year IN ({placeholders})")
         params.extend(filters["fiscal_years"])
 
     # Multi-select: case_statuses
     if filters.get("case_statuses"):
-        placeholders = ", ".join(["?"] * len(filters["case_statuses"]))
+        placeholders = ", ".join(["%s"] * len(filters["case_statuses"]))
         clauses.append(f"case_status IN ({placeholders})")
         params.extend(filters["case_statuses"])
 
     # Text contains: employer_name
     if filters.get("employer_name"):
-        clauses.append("employer_name LIKE ?")
+        clauses.append("employer_name LIKE %s")
         params.append(f"%{filters['employer_name'].upper()}%")
 
     if clauses:

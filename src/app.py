@@ -61,17 +61,6 @@ conn.execute("""
 """)
 conn.commit()
 
-# Migrate: add columns if they don't exist (for existing DBs)
-for col_sql in [
-    "ALTER TABLE saved_companies ADD COLUMN status TEXT DEFAULT 'Interested'",
-    "ALTER TABLE saved_companies ADD COLUMN role TEXT DEFAULT ''",
-]:
-    try:
-        conn.execute(col_sql)
-        conn.commit()
-    except Exception:
-        pass
-
 # ── Pre-compute CN affiliation scores (one-time, cached in DB) ───────────────
 cached_count = conn.execute("SELECT COUNT(*) FROM company_cn_scores").fetchone()[0]
 total_employers = conn.execute("SELECT COUNT(DISTINCT employer_name) FROM lca_records").fetchone()[0]
@@ -88,7 +77,7 @@ if cached_count < total_employers:
         label = get_affiliation_label(s)
         batch.append((r[0], s, label))
     conn.executemany(
-        "INSERT OR REPLACE INTO company_cn_scores (employer_name, cn_score, cn_label) VALUES (?, ?, ?)",
+        "INSERT INTO company_cn_scores (employer_name, cn_score, cn_label) VALUES (%s, %s, %s) ON CONFLICT (employer_name) DO UPDATE SET cn_score=EXCLUDED.cn_score, cn_label=EXCLUDED.cn_label",
         batch,
     )
     conn.commit()
@@ -205,8 +194,8 @@ SELECT
     ROUND(MIN(annual_wage_from), 0) AS "Min Salary",
     ROUND(AVG(annual_wage_from), 0) AS "Median Salary",
     ROUND(MAX(annual_wage_from), 0) AS "Max Salary",
-    GROUP_CONCAT(DISTINCT pw_wage_level) AS "Wage Levels",
-    GROUP_CONCAT(DISTINCT fiscal_year) AS "Years"
+    STRING_AGG(DISTINCT pw_wage_level, ',') AS "Wage Levels",
+    STRING_AGG(DISTINCT CAST(fiscal_year AS TEXT), ',') AS "Years"
 FROM lca_records
 {where_sql}
 GROUP BY employer_name
@@ -257,9 +246,9 @@ def render_company_detail(company, detail_where_sql, detail_base_params):
     detail_params = list(detail_base_params)
 
     if detail_where:
-        detail_where += " AND employer_name = ?"
+        detail_where += " AND employer_name = %s"
     else:
-        detail_where = "WHERE employer_name = ?"
+        detail_where = "WHERE employer_name = %s"
     detail_params.append(company)
 
     detail_sql = f"""
@@ -384,14 +373,14 @@ with tab_explore:
                 with col_action:
                     conn_check = get_connection()
                     is_saved = conn_check.execute(
-                        "SELECT 1 FROM saved_companies WHERE employer_name = ?", (selected_company,)
+                        "SELECT 1 FROM saved_companies WHERE employer_name = %s", (selected_company,)
                     ).fetchone() is not None
                     conn_check.close()
 
                     if is_saved:
                         if st.button("✓ Saved", key=f"unsave_explore_{selected_company}", type="secondary"):
                             conn_op = get_connection()
-                            conn_op.execute("DELETE FROM saved_companies WHERE employer_name = ?", (selected_company,))
+                            conn_op.execute("DELETE FROM saved_companies WHERE employer_name = %s", (selected_company,))
                             conn_op.commit()
                             conn_op.close()
                             st.rerun()
@@ -399,7 +388,7 @@ with tab_explore:
                         if st.button("⭐ Save", key=f"save_explore_{selected_company}"):
                             conn_op = get_connection()
                             conn_op.execute(
-                                "INSERT OR IGNORE INTO saved_companies (employer_name, status, role, saved_at) VALUES (?, 'Interested', '', ?)",
+                                "INSERT INTO saved_companies (employer_name, status, role, saved_at) VALUES (%s, 'Interested', '', %s) ON CONFLICT (employer_name) DO NOTHING",
                                 (selected_company, datetime.now().isoformat()),
                             )
                             conn_op.commit()
@@ -409,7 +398,7 @@ with tab_explore:
                 # Chinese-affiliation manual tag
                 conn_tag = get_connection()
                 current_tag = conn_tag.execute(
-                    "SELECT chinese_affiliated FROM company_tags WHERE employer_name = ?",
+                    "SELECT chinese_affiliated FROM company_tags WHERE employer_name = %s",
                     (selected_company,)
                 ).fetchone()
                 conn_tag.close()
@@ -428,7 +417,7 @@ with tab_explore:
                 if new_tag_val != current_tag_val:
                     conn_tag = get_connection()
                     conn_tag.execute(
-                        "INSERT OR REPLACE INTO company_tags (employer_name, chinese_affiliated) VALUES (?, ?)",
+                        "INSERT INTO company_tags (employer_name, chinese_affiliated) VALUES (%s, %s) ON CONFLICT (employer_name) DO UPDATE SET chinese_affiliated=EXCLUDED.chinese_affiliated",
                         (selected_company, new_tag_val),
                     )
                     conn_tag.commit()
@@ -522,7 +511,7 @@ with tab_saved:
             stats = query_df(
                 "SELECT COUNT(*) AS total, ROUND(MIN(annual_wage_from),0) AS min_sal, "
                 "ROUND(AVG(annual_wage_from),0) AS avg_sal, ROUND(MAX(annual_wage_from),0) AS max_sal "
-                "FROM lca_records WHERE employer_name = ?",
+                "FROM lca_records WHERE employer_name = %s",
                 (company_name,),
             )
             total_lcas = int(stats["total"].iloc[0]) if not stats.empty else 0
@@ -580,7 +569,7 @@ with tab_saved:
 
                     with col_role:
                         soc_titles = query_df(
-                            "SELECT DISTINCT soc_title FROM lca_records WHERE employer_name = ? AND soc_title IS NOT NULL ORDER BY soc_title",
+                            "SELECT DISTINCT soc_title FROM lca_records WHERE employer_name = %s AND soc_title IS NOT NULL ORDER BY soc_title",
                             (company_name,),
                         )["soc_title"].tolist()
                         role_options = [""] + soc_titles
@@ -595,7 +584,7 @@ with tab_saved:
                     if new_status != current_status or new_role != current_role:
                         conn_up = get_connection()
                         conn_up.execute(
-                            "UPDATE saved_companies SET status = ?, role = ? WHERE employer_name = ?",
+                            "UPDATE saved_companies SET status = %s, role = %s WHERE employer_name = %s",
                             (new_status, new_role, company_name),
                         )
                         conn_up.commit()
@@ -606,7 +595,7 @@ with tab_saved:
 
                     if st.button("Unsave", key=f"unsave_saved_{company_name}"):
                         conn_op = get_connection()
-                        conn_op.execute("DELETE FROM saved_companies WHERE employer_name = ?", (company_name,))
+                        conn_op.execute("DELETE FROM saved_companies WHERE employer_name = %s", (company_name,))
                         conn_op.commit()
                         conn_op.close()
                         st.rerun()
@@ -662,7 +651,7 @@ with tab_tracker:
                     conn_add = get_connection()
                     conn_add.execute(
                         "INSERT INTO job_applications (company, job_title, job_urls, stage, notes, created_at, updated_at) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
                         (new_company, new_title, new_urls.strip(), new_stage, new_notes, now, now),
                     )
                     conn_add.commit()
@@ -726,7 +715,7 @@ with tab_tracker:
                 row_old = df_edit.iloc[idx]
                 if not row_new.equals(row_old):
                     conn_edit.execute(
-                        "UPDATE job_applications SET company=?, job_title=?, job_urls=?, stage=?, notes=?, updated_at=? WHERE id=?",
+                        "UPDATE job_applications SET company=%s, job_title=%s, job_urls=%s, stage=%s, notes=%s, updated_at=%s WHERE id=%s",
                         (row_new["Company"], row_new["Job Title"], row_new["Job Links"],
                          row_new["Stage"], row_new["Notes"], now, int(row_new["ID"])),
                     )
@@ -743,7 +732,7 @@ with tab_tracker:
             if delete_choice and st.button("Delete", key="delete_job_btn", type="primary"):
                 job_id = int(delete_choice.split("#")[1].split(" —")[0])
                 conn_del = get_connection()
-                conn_del.execute("DELETE FROM job_applications WHERE id = ?", (job_id,))
+                conn_del.execute("DELETE FROM job_applications WHERE id = %s", (job_id,))
                 conn_del.commit()
                 conn_del.close()
                 st.rerun()
