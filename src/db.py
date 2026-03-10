@@ -187,10 +187,15 @@ def insert_records(records: list[dict]):
 def query_df(sql: str, params: tuple = ()) -> pd.DataFrame:
     raw = psycopg2.connect(_get_database_url())
     try:
-        df = pd.read_sql_query(sql, raw, params=params if params else None)
+        cur = raw.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+        cur.execute(sql, params if params else None)
+        rows = cur.fetchall()
+        if not rows:
+            cols = [d[0] for d in cur.description] if cur.description else []
+            return pd.DataFrame(columns=cols)
+        return pd.DataFrame([dict(r) for r in rows])
     finally:
         raw.close()
-    return df
 
 
 def get_distinct_values(column: str) -> list[str]:
