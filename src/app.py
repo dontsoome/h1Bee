@@ -37,6 +37,7 @@ except Exception as e:
     st.stop()
 
 # ── Pre-compute CN affiliation scores (one-time, cached in DB) ───────────────
+conn = get_connection()
 cached_count = conn.execute("SELECT COUNT(*) FROM company_cn_scores").fetchone()[0]
 total_employers = conn.execute("SELECT COUNT(DISTINCT employer_name) FROM lca_records").fetchone()[0]
 
