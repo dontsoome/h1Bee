@@ -10,11 +10,11 @@ def _get_database_url() -> str:
     if not url:
         try:
             import streamlit as st
-            url = st.secrets.get("DATABASE_URL")
-        except Exception:
-            pass
-    if not url:
-        raise RuntimeError("DATABASE_URL is not set. Add it to .env or Streamlit secrets.")
+            url = st.secrets["DATABASE_URL"]
+        except KeyError:
+            raise RuntimeError("DATABASE_URL secret not found in Streamlit secrets. Add DATABASE_URL to your app's secrets.")
+        except Exception as e:
+            raise RuntimeError(f"Could not read DATABASE_URL from Streamlit secrets: {e}")
     return url
 
 
