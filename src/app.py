@@ -10,6 +10,13 @@ from io import BytesIO
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+# Inject Streamlit secrets into environment before any DB imports
+if "DATABASE_URL" not in os.environ:
+    try:
+        os.environ["DATABASE_URL"] = st.secrets["DATABASE_URL"]
+    except Exception:
+        pass
+
 from db import get_connection, query_df, get_distinct_values
 from filters import build_where_clause
 from heuristics import score_company, get_affiliation_label

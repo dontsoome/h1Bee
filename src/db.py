@@ -8,13 +8,7 @@ import pandas as pd
 def _get_database_url() -> str:
     url = os.environ.get("DATABASE_URL")
     if not url:
-        try:
-            import streamlit as st
-            url = st.secrets["DATABASE_URL"]
-        except KeyError:
-            raise RuntimeError("DATABASE_URL secret not found in Streamlit secrets. Add DATABASE_URL to your app's secrets.")
-        except Exception as e:
-            raise RuntimeError(f"Could not read DATABASE_URL from Streamlit secrets: {e}")
+        raise RuntimeError("DATABASE_URL is not set.")
     return url
 
 
