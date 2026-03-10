@@ -36,43 +36,6 @@ except Exception as e:
     st.error(f"Could not connect to database. Check your DATABASE_URL. ({e})")
     st.stop()
 
-# ── Ensure tables exist with current schema ──────────────────────────────────
-conn = get_connection()
-conn.execute("""
-    CREATE TABLE IF NOT EXISTS saved_companies (
-        employer_name TEXT PRIMARY KEY,
-        status TEXT DEFAULT 'Interested',
-        role TEXT DEFAULT '',
-        saved_at TEXT
-    )
-""")
-conn.execute("""
-    CREATE TABLE IF NOT EXISTS company_tags (
-        employer_name TEXT PRIMARY KEY,
-        chinese_affiliated INTEGER DEFAULT 0
-    )
-""")
-conn.execute("""
-    CREATE TABLE IF NOT EXISTS company_cn_scores (
-        employer_name TEXT PRIMARY KEY,
-        cn_score INTEGER DEFAULT 0,
-        cn_label TEXT DEFAULT ''
-    )
-""")
-conn.execute("""
-    CREATE TABLE IF NOT EXISTS job_applications (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        company TEXT NOT NULL,
-        job_title TEXT NOT NULL DEFAULT '',
-        job_urls TEXT NOT NULL DEFAULT '',
-        stage TEXT NOT NULL DEFAULT 'Interested',
-        notes TEXT NOT NULL DEFAULT '',
-        created_at TEXT,
-        updated_at TEXT
-    )
-""")
-conn.commit()
-
 # ── Pre-compute CN affiliation scores (one-time, cached in DB) ───────────────
 cached_count = conn.execute("SELECT COUNT(*) FROM company_cn_scores").fetchone()[0]
 total_employers = conn.execute("SELECT COUNT(DISTINCT employer_name) FROM lca_records").fetchone()[0]
