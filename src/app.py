@@ -10,18 +10,19 @@ from io import BytesIO
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-from db import get_connection, query_df, get_distinct_values, DB_PATH
+from db import get_connection, query_df, get_distinct_values
 from filters import build_where_clause
 from heuristics import score_company, get_affiliation_label
 
 st.set_page_config(page_title="H1BEE — H-1B Explorer", layout="wide")
 st.title("H1BEE — H-1B LCA Data Explorer")
 
-# Check if database exists
-if not os.path.exists(DB_PATH):
-    st.error(
-        "Database not found. Run `python src/ingest.py` first to load data."
-    )
+# Check database connection
+try:
+    _conn = get_connection()
+    _conn.close()
+except Exception as e:
+    st.error(f"Could not connect to database. Check your DATABASE_URL. ({e})")
     st.stop()
 
 # ── Ensure tables exist with current schema ──────────────────────────────────
