@@ -13,9 +13,9 @@ def _get_database_url() -> str:
             url = st.secrets.get("DATABASE_URL")
         except Exception:
             pass
+    if not url:
+        raise RuntimeError("DATABASE_URL is not set. Add it to .env or Streamlit secrets.")
     return url
-
-DATABASE_URL = _get_database_url()
 
 
 class _Cursor:
@@ -43,8 +43,8 @@ class Connection:
     used throughout this app (conn.execute, conn.executemany, conn.commit, conn.close).
     """
 
-    def __init__(self):
-        self._conn = psycopg2.connect(DATABASE_URL)
+    def __init__(self, database_url: str):
+        self._conn = psycopg2.connect(database_url)
         self._conn.autocommit = False
 
     def execute(self, sql: str, params=()):
@@ -78,7 +78,7 @@ class Connection:
 
 
 def get_connection() -> Connection:
-    return Connection()
+    return Connection(_get_database_url())
 
 
 def create_tables():
@@ -183,15 +183,15 @@ def insert_records(records: list[dict]):
         ON CONFLICT (case_number) DO UPDATE SET {update_set}
     """
     rows = [tuple(r.get(c) for c in cols) for r in records]
-    conn = get_connection()
-    cur = conn._conn.cursor()
+    pg = psycopg2.connect(_get_database_url())
+    cur = pg.cursor()
     psycopg2.extras.execute_values(cur, sql, rows, page_size=1000)
-    conn.commit()
-    conn.close()
+    pg.commit()
+    pg.close()
 
 
 def query_df(sql: str, params: tuple = ()) -> pd.DataFrame:
-    raw = psycopg2.connect(DATABASE_URL)
+    raw = psycopg2.connect(_get_database_url())
     try:
         df = pd.read_sql_query(sql, raw, params=params if params else None)
     finally:
