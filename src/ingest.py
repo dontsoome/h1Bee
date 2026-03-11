@@ -6,6 +6,8 @@ import re
 import sys
 import glob
 import pandas as pd
+from dotenv import load_dotenv
+load_dotenv(os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env"))
 from db import create_tables, insert_records
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
