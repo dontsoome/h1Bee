@@ -36,29 +36,8 @@ except Exception as e:
     st.error(f"Could not connect to database. Check your DATABASE_URL. ({e})")
     st.stop()
 
-# ── Pre-compute CN affiliation scores (one-time, cached in DB) ───────────────
+# ── Load record count ─────────────────────────────────────────────────────────
 conn = get_connection()
-cached_count = conn.execute("SELECT COUNT(*) FROM company_cn_scores").fetchone()[0]
-total_employers = conn.execute("SELECT COUNT(DISTINCT employer_name) FROM lca_records").fetchone()[0]
-
-if cached_count < total_employers:
-    # Rebuild cache
-    rows = conn.execute("""
-        SELECT employer_name, MIN(trade_name_dba) AS trade_name_dba, MIN(employer_city) AS employer_city
-        FROM lca_records GROUP BY employer_name
-    """).fetchall()
-    batch = []
-    for r in rows:
-        s = score_company(r[0], r[1], r[2])
-        label = get_affiliation_label(s)
-        batch.append((r[0], s, label))
-    conn.executemany(
-        "INSERT INTO company_cn_scores (employer_name, cn_score, cn_label) VALUES (%s, %s, %s) ON CONFLICT (employer_name) DO UPDATE SET cn_score=EXCLUDED.cn_score, cn_label=EXCLUDED.cn_label",
-        batch,
-    )
-    conn.commit()
-
-# Check if there are records
 count = conn.execute("SELECT COUNT(*) FROM lca_records").fetchone()[0]
 conn.close()
 if count == 0:
