@@ -44,7 +44,7 @@ total_employers = conn.execute("SELECT COUNT(DISTINCT employer_name) FROM lca_re
 if cached_count < total_employers:
     # Rebuild cache
     rows = conn.execute("""
-        SELECT employer_name, MIN(trade_name_dba), MIN(employer_city)
+        SELECT employer_name, MIN(trade_name_dba) AS trade_name_dba, MIN(employer_city) AS employer_city
         FROM lca_records GROUP BY employer_name
     """).fetchall()
     batch = []
