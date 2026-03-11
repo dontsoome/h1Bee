@@ -179,6 +179,13 @@ def main():
 
     print(f"\nDone! Total records ingested: {total_inserted}")
 
+    print("\nRefreshing materialized view...")
+    conn = get_connection()
+    conn.execute("REFRESH MATERIALIZED VIEW company_stats")
+    conn.commit()
+    conn.close()
+    print("company_stats refreshed.")
+
 
 if __name__ == "__main__":
     main()
