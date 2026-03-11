@@ -1,5 +1,6 @@
-"""Ingest DOL OFLC LCA .xlsx files from data/ into SQLite."""
+"""Ingest DOL OFLC LCA .xlsx files into Supabase (PostgreSQL)."""
 
+from __future__ import annotations
 import os
 import re
 import sys
