@@ -141,6 +141,12 @@ total_pages = max(1, -(-company_count // PAGE_SIZE))
 
 if "page" not in st.session_state:
     st.session_state.page = 1
+if "last_filter_key" not in st.session_state:
+    st.session_state.last_filter_key = ""
+filter_key = str((where_sql, params))
+if filter_key != st.session_state.last_filter_key:
+    st.session_state.page = 1
+    st.session_state.last_filter_key = filter_key
 st.session_state.page = max(1, min(st.session_state.page, total_pages))
 
 @st.cache_data(ttl=300)
@@ -177,8 +183,18 @@ st.subheader(f"Companies ({company_count:,} results)")
 if company_count == 0:
     st.info("No results. Adjust the sidebar filters.")
 else:
+    # ── Sort controls ─────────────────────────────────────────────────────────
+    sort_cols = [c for c in ["Total LCAs", "Min Salary", "Max Salary", "States", "Company"] if c in all_companies_df.columns]
+    sc1, sc2 = st.columns([3, 1])
+    with sc1:
+        sort_by = st.selectbox("Sort by", sort_cols, index=0, label_visibility="collapsed")
+    with sc2:
+        sort_asc = st.checkbox("Ascending", value=False)
+
+    sorted_df = all_companies_df.sort_values(sort_by, ascending=sort_asc, na_position="last")
+
     offset = (st.session_state.page - 1) * PAGE_SIZE
-    df = all_companies_df.iloc[offset : offset + PAGE_SIZE].reset_index(drop=True)
+    df = sorted_df.iloc[offset : offset + PAGE_SIZE].reset_index(drop=True)
 
     # Format salary columns
     for col in ["Min Salary", "Avg Salary", "Max Salary"]:
