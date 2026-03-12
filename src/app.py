@@ -185,6 +185,11 @@ def get_career_url(company: str) -> str:
     conn.close()
     return row[0] if row and row[0] else ""
 
+def get_tracked_companies() -> set:
+    """Return the set of company names currently in the tracker (no cache — must be fresh)."""
+    rows = query_df("SELECT DISTINCT company FROM job_applications")
+    return set(rows["company"].tolist()) if not rows.empty else set()
+
 def add_to_tracker(company: str):
     now = datetime.now(timezone.utc).isoformat()
     conn = get_connection()
@@ -193,6 +198,12 @@ def add_to_tracker(company: str):
            VALUES (%s, '', '', 'Interested', '', %s, %s)""",
         (company, now, now),
     )
+    conn.commit()
+    conn.close()
+
+def remove_from_tracker(company: str):
+    conn = get_connection()
+    conn.execute("DELETE FROM job_applications WHERE company = %s", (company,))
     conn.commit()
     conn.close()
 
@@ -248,6 +259,15 @@ tab_explorer, tab_tracker = st.tabs(["Explorer", "Job Tracker"])
 
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_explorer:
+    # ── Company search ────────────────────────────────────────────────────────
+    all_names = [""] + (all_companies_df["Company"].tolist() if not all_companies_df.empty else [])
+    search_company = st.selectbox(
+        "Search for a company",
+        options=all_names,
+        format_func=lambda x: "Type to search a company..." if x == "" else x,
+        key="company_search",
+    )
+
     st.subheader(f"Companies ({company_count:,} results)")
 
     if company_count == 0:
@@ -306,22 +326,33 @@ with tab_explorer:
                 st.session_state.page += 1
                 st.rerun()
 
-        # ── Company drill-down ────────────────────────────────────────────────
-        selected_company = None
-        if selection and selection.selection and selection.selection.rows:
+        # ── Resolve selected company (search takes priority over table click) ─
+        selected_company = search_company or None
+        if not selected_company and selection and selection.selection and selection.selection.rows:
             idx = selection.selection.rows[0]
             if idx < len(df):
                 selected_company = df.iloc[idx]["Company"]
 
+        # ── Company drill-down ────────────────────────────────────────────────
         if selected_company:
+            tracked = get_tracked_companies()
+            is_tracked = selected_company in tracked
+
             with st.container(border=True):
-                col_name, col_save = st.columns([5, 1])
+                col_name, col_btn = st.columns([5, 1])
                 with col_name:
                     st.markdown(f"### {selected_company}")
-                with col_save:
-                    if st.button("+ Save to Tracker", key="save_btn", use_container_width=True):
-                        add_to_tracker(selected_company)
-                        st.success(f"Added to Job Tracker.")
+                with col_btn:
+                    if is_tracked:
+                        if st.button("Remove from Tracker", key="remove_btn", use_container_width=True):
+                            remove_from_tracker(selected_company)
+                            st.cache_data.clear()
+                            st.rerun()
+                    else:
+                        if st.button("+ Save to Tracker", key="save_btn", use_container_width=True):
+                            add_to_tracker(selected_company)
+                            st.cache_data.clear()
+                            st.rerun()
 
                 career_url = get_career_url(selected_company)
                 if career_url:
