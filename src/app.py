@@ -259,14 +259,17 @@ tab_explorer, tab_tracker = st.tabs(["Explorer", "Job Tracker"])
 
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_explorer:
-    # ── Company search ────────────────────────────────────────────────────────
+    # ── Company search (single source of truth via session state) ─────────────
+    if "company_search" not in st.session_state:
+        st.session_state["company_search"] = ""
     all_names = [""] + (all_companies_df["Company"].tolist() if not all_companies_df.empty else [])
-    search_company = st.selectbox(
+    st.selectbox(
         "Search for a company",
         options=all_names,
         format_func=lambda x: "Type to search a company..." if x == "" else x,
         key="company_search",
     )
+    search_company = st.session_state["company_search"]
 
     st.subheader(f"Companies ({company_count:,} results)")
 
@@ -301,20 +304,17 @@ with tab_explorer:
         )
 
         # ── Pagination controls ───────────────────────────────────────────────
+        # Render all three controls first, then handle whichever fired.
         col_prev, col_page, col_info, col_next = st.columns([0.3, 0.4, 2.5, 0.3])
         with col_prev:
-            if st.button("←", disabled=st.session_state.page <= 1, key="prev"):
-                st.session_state.page -= 1
-                st.rerun()
+            prev_clicked = st.button("←", disabled=st.session_state.page <= 1, key="prev")
         with col_page:
+            # No key — value= always reflects current page, no stale session state conflict
             new_page = st.number_input(
                 "Page", min_value=1, max_value=total_pages,
                 value=st.session_state.page,
-                label_visibility="collapsed", key="page_input",
+                label_visibility="collapsed",
             )
-            if new_page != st.session_state.page:
-                st.session_state.page = new_page
-                st.rerun()
         with col_info:
             st.markdown(
                 f"<p style='margin:0;padding-top:6px;font-size:0.85rem;color:gray;'>"
@@ -322,18 +322,29 @@ with tab_explorer:
                 unsafe_allow_html=True,
             )
         with col_next:
-            if st.button("→", disabled=st.session_state.page >= total_pages, key="next"):
-                st.session_state.page += 1
-                st.rerun()
+            next_clicked = st.button("→", disabled=st.session_state.page >= total_pages, key="next")
 
-        # ── Resolve selected company (search takes priority over table click) ─
-        selected_company = search_company or None
-        if not selected_company and selection and selection.selection and selection.selection.rows:
+        if prev_clicked:
+            st.session_state.page -= 1
+            st.rerun()
+        elif next_clicked:
+            st.session_state.page += 1
+            st.rerun()
+        elif int(new_page) != st.session_state.page:
+            st.session_state.page = int(new_page)
+            st.rerun()
+
+        # ── Sync table row click → search bar ────────────────────────────────
+        if selection and selection.selection and selection.selection.rows:
             idx = selection.selection.rows[0]
             if idx < len(df):
-                selected_company = df.iloc[idx]["Company"]
+                table_company = df.iloc[idx]["Company"]
+                if table_company != search_company:
+                    st.session_state["company_search"] = table_company
+                    st.rerun()
 
         # ── Company drill-down ────────────────────────────────────────────────
+        selected_company = search_company or None
         if selected_company:
             tracked = get_tracked_companies()
             is_tracked = selected_company in tracked
@@ -346,12 +357,10 @@ with tab_explorer:
                     if is_tracked:
                         if st.button("Remove from Tracker", key="remove_btn", use_container_width=True):
                             remove_from_tracker(selected_company)
-                            st.cache_data.clear()
                             st.rerun()
                     else:
                         if st.button("+ Save to Tracker", key="save_btn", use_container_width=True):
                             add_to_tracker(selected_company)
-                            st.cache_data.clear()
                             st.rerun()
 
                 career_url = get_career_url(selected_company)
