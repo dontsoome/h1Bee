@@ -49,6 +49,10 @@ steps = [
      "CREATE EXTENSION IF NOT EXISTS pg_trgm"),
     ("Trigram index on lca_records(employer_name)",
      "CREATE INDEX IF NOT EXISTS idx_employer_trgm ON lca_records USING gin(employer_name gin_trgm_ops)"),
+    ("Trigram index on lca_records(job_title)",
+     "CREATE INDEX IF NOT EXISTS idx_job_title_trgm ON lca_records USING gin(job_title gin_trgm_ops)"),
+    ("Trigram index on lca_records(worksite_city)",
+     "CREATE INDEX IF NOT EXISTS idx_city_trgm ON lca_records USING gin(worksite_city gin_trgm_ops)"),
     ("Trigram index on company_stats(employer_name)",
      "CREATE INDEX IF NOT EXISTS idx_stats_employer_trgm ON company_stats USING gin(employer_name gin_trgm_ops)"),
 ]

@@ -57,20 +57,22 @@ opts = load_filter_options()
 total_records = get_total_count()
 st.caption(f"{total_records:,} total LCA records")
 
-# ── Sidebar filters ───────────────────────────────────────────────────────────
+# ── Sidebar filters (wrapped in form — query only fires on Apply) ─────────────
 st.sidebar.header("Filters")
 
-default_statuses = [s for s in opts["statuses"] if s.upper() == "CERTIFIED"] or opts["statuses"][:1]
-selected_statuses = st.sidebar.multiselect("Case Status", opts["statuses"], default=default_statuses)
-selected_years    = st.sidebar.multiselect("Fiscal Year", opts["years"])
-selected_states   = st.sidebar.multiselect("Worksite State", opts["states"])
-city_input        = st.sidebar.text_input("Worksite City (contains)")
-employer_input    = st.sidebar.text_input("Employer Name (contains)")
-job_title_input   = st.sidebar.text_input("Job Title (comma-separated)")
-selected_levels   = st.sidebar.multiselect("Wage Level", opts["levels"])
-st.sidebar.subheader("Annual Wage Range")
-wage_min = st.sidebar.number_input("Min Annual Wage", min_value=0, value=0, step=10000)
-wage_max = st.sidebar.number_input("Max Annual Wage", min_value=0, value=0, step=10000)
+with st.sidebar.form("filters_form"):
+    default_statuses = [s for s in opts["statuses"] if s.upper() == "CERTIFIED"] or opts["statuses"][:1]
+    selected_statuses = st.multiselect("Case Status", opts["statuses"], default=default_statuses)
+    selected_years    = st.multiselect("Fiscal Year", opts["years"])
+    selected_states   = st.multiselect("Worksite State", opts["states"])
+    city_input        = st.text_input("Worksite City (contains)")
+    employer_input    = st.text_input("Employer Name (contains)")
+    job_title_input   = st.text_input("Job Title (comma-separated)")
+    selected_levels   = st.multiselect("Wage Level", opts["levels"])
+    st.subheader("Annual Wage Range")
+    wage_min = st.number_input("Min Annual Wage", min_value=0, value=0, step=10000)
+    wage_max = st.number_input("Max Annual Wage", min_value=0, value=0, step=10000)
+    st.form_submit_button("Apply Filters", use_container_width=True)
 
 filters = {}
 if selected_statuses: filters["case_statuses"] = selected_statuses
@@ -134,7 +136,7 @@ all_companies_df = load_all_companies(use_stats_view, where_sql, tuple(params))
 company_count = len(all_companies_df)
 
 # ── Pagination ────────────────────────────────────────────────────────────────
-PAGE_SIZE = 25
+PAGE_SIZE = 50
 total_pages = max(1, -(-company_count // PAGE_SIZE))
 
 if "page" not in st.session_state:
@@ -189,6 +191,7 @@ else:
         hide_index=True,
         on_select="rerun",
         selection_mode="single-row",
+        height=600,
         key="main_table",
     )
 
