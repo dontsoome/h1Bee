@@ -90,44 +90,10 @@ where_sql, params = build_where_clause(filters)
 HEAVY_FILTERS = {"states", "city", "job_title", "soc_titles", "wage_levels", "wage_min", "wage_max", "fiscal_years"}
 use_stats_view = not any(k in filters for k in HEAVY_FILTERS)
 
-# ── Count query ───────────────────────────────────────────────────────────────
+# ── Load all companies (cached; pagination done in Python) ────────────────────
 @st.cache_data(ttl=300)
-def get_company_count(use_stats: bool, where_sql: str, params: tuple) -> int:
-    conn = get_connection()
+def load_all_companies(use_stats: bool, where_sql: str, params: tuple) -> pd.DataFrame:
     if use_stats:
-        clauses, p = [], []
-        if selected_statuses:
-            clauses.append("case_status IN (" + ",".join(["%s"]*len(selected_statuses)) + ")")
-            p.extend(selected_statuses)
-        if employer_input.strip():
-            clauses.append("employer_name LIKE %s")
-            p.append(f"%{employer_input.strip().upper()}%")
-        w = ("WHERE " + " AND ".join(clauses)) if clauses else ""
-        sql = f"SELECT COUNT(DISTINCT employer_name) FROM company_stats {w}"
-        n = conn.execute(sql, tuple(p)).fetchone()[0]
-    else:
-        sql = f"SELECT COUNT(DISTINCT employer_name) FROM lca_records {where_sql}"
-        n = conn.execute(sql, params).fetchone()[0]
-    conn.close()
-    return n
-
-company_count = get_company_count(use_stats_view, where_sql, tuple(params))
-
-# ── Pagination ────────────────────────────────────────────────────────────────
-PAGE_SIZE = 25
-total_pages = max(1, -(-company_count // PAGE_SIZE))
-
-if "page" not in st.session_state:
-    st.session_state.page = 1
-st.session_state.page = max(1, min(st.session_state.page, total_pages))
-
-offset = (st.session_state.page - 1) * PAGE_SIZE
-
-# ── Load companies ────────────────────────────────────────────────────────────
-@st.cache_data(ttl=300)
-def load_companies(use_stats: bool, where_sql: str, params: tuple, limit: int, offset: int) -> pd.DataFrame:
-    if use_stats:
-        # Fast path: read from pre-aggregated materialized view
         clauses, p = [], []
         if selected_statuses:
             clauses.append("case_status IN (" + ",".join(["%s"]*len(selected_statuses)) + ")")
@@ -147,12 +113,9 @@ def load_companies(use_stats: bool, where_sql: str, params: tuple, limit: int, o
             FROM company_stats {w}
             GROUP BY employer_name
             ORDER BY SUM(total_lcas) DESC
-            LIMIT %s OFFSET %s
         """
-        p += [limit, offset]
         return query_df(sql, tuple(p))
     else:
-        # Slow path: live aggregation with simplified SELECT (no STRING_AGG)
         sql = f"""
             SELECT
                 employer_name                              AS "Company",
@@ -164,9 +127,19 @@ def load_companies(use_stats: bool, where_sql: str, params: tuple, limit: int, o
             {where_sql}
             GROUP BY employer_name
             ORDER BY COUNT(*) DESC
-            LIMIT %s OFFSET %s
         """
-        return query_df(sql, tuple(params) + (limit, offset))
+        return query_df(sql, tuple(params))
+
+all_companies_df = load_all_companies(use_stats_view, where_sql, tuple(params))
+company_count = len(all_companies_df)
+
+# ── Pagination ────────────────────────────────────────────────────────────────
+PAGE_SIZE = 25
+total_pages = max(1, -(-company_count // PAGE_SIZE))
+
+if "page" not in st.session_state:
+    st.session_state.page = 1
+st.session_state.page = max(1, min(st.session_state.page, total_pages))
 
 @st.cache_data(ttl=300)
 def load_company_detail(company: str, where_sql: str, params: tuple) -> pd.DataFrame:
@@ -202,7 +175,8 @@ st.subheader(f"Companies ({company_count:,} results)")
 if company_count == 0:
     st.info("No results. Adjust the sidebar filters.")
 else:
-    df = load_companies(use_stats_view, where_sql, tuple(params), PAGE_SIZE, offset)
+    offset = (st.session_state.page - 1) * PAGE_SIZE
+    df = all_companies_df.iloc[offset : offset + PAGE_SIZE].reset_index(drop=True)
 
     # Format salary columns
     for col in ["Min Salary", "Avg Salary", "Max Salary"]:
