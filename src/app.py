@@ -62,13 +62,16 @@ st.sidebar.header("Filters")
 
 with st.sidebar.form("filters_form"):
     default_statuses = [s for s in opts["statuses"] if s.upper() == "CERTIFIED"] or opts["statuses"][:1]
+    default_years    = [y for y in opts["years"] if y in (2025, 2026)]
+    default_states   = [s for s in opts["states"] if s in ("NY", "NJ")]
+    default_levels   = [l for l in opts["levels"] if l in ("I", "II", "Level I", "Level II")]
     selected_statuses = st.multiselect("Case Status", opts["statuses"], default=default_statuses)
-    selected_years    = st.multiselect("Fiscal Year", opts["years"])
-    selected_states   = st.multiselect("Worksite State", opts["states"])
+    selected_years    = st.multiselect("Fiscal Year", opts["years"], default=default_years)
+    selected_states   = st.multiselect("Worksite State", opts["states"], default=default_states)
     city_input        = st.text_input("Worksite City (contains)")
     employer_input    = st.text_input("Employer Name (contains)")
     job_title_input   = st.text_input("Job Title (comma-separated)")
-    selected_levels   = st.multiselect("Wage Level", opts["levels"])
+    selected_levels   = st.multiselect("Wage Level", opts["levels"], default=default_levels)
     st.subheader("Annual Wage Range")
     wage_min = st.number_input("Min Annual Wage", min_value=0, value=0, step=10000)
     wage_max = st.number_input("Max Annual Wage", min_value=0, value=0, step=10000)
@@ -130,43 +133,8 @@ def load_all_companies(use_stats: bool, where_sql: str, params: tuple) -> pd.Dat
         """
         return query_df(sql, tuple(params))
 
-@st.cache_data(ttl=600)
-def load_nynj_companies() -> pd.DataFrame:
-    """Pre-filtered: CERTIFIED, NY+NJ, 2025/2026, Wage Level I/II."""
-    try:
-        return query_df("""
-            SELECT
-                employer_name AS "Company",
-                total_lcas    AS "Total LCAs",
-                unique_roles  AS "Unique Roles",
-                min_salary    AS "Min Salary",
-                avg_salary    AS "Avg Salary",
-                max_salary    AS "Max Salary"
-            FROM company_stats_nynj
-            ORDER BY total_lcas DESC
-        """)
-    except Exception:
-        return query_df("""
-            SELECT
-                employer_name                              AS "Company",
-                COUNT(*)                                   AS "Total LCAs",
-                COUNT(DISTINCT job_title)                  AS "Unique Roles",
-                ROUND(MIN(annual_wage_from)::numeric, 0)   AS "Min Salary",
-                ROUND(AVG(annual_wage_from)::numeric, 0)   AS "Avg Salary",
-                ROUND(MAX(annual_wage_from)::numeric, 0)   AS "Max Salary"
-            FROM lca_records
-            WHERE case_status = 'CERTIFIED'
-              AND worksite_state IN ('NY', 'NJ')
-              AND fiscal_year IN (2025, 2026)
-              AND pw_wage_level = ANY(ARRAY['I', 'II', 'Level I', 'Level II'])
-            GROUP BY employer_name
-            ORDER BY COUNT(*) DESC
-        """)
-
 all_companies_df = load_all_companies(use_stats_view, where_sql, tuple(params))
 company_count = len(all_companies_df)
-
-nynj_df = load_nynj_companies()
 
 # ── Pagination state ──────────────────────────────────────────────────────────
 PAGE_SIZE = 50
@@ -181,11 +149,6 @@ if filter_key != st.session_state.last_filter_key:
     st.session_state.page = 1
     st.session_state.last_filter_key = filter_key
 st.session_state.page = max(1, min(st.session_state.page, total_pages))
-
-if "nynj_page" not in st.session_state:
-    st.session_state.nynj_page = 1
-nynj_total_pages = max(1, -(-len(nynj_df) // PAGE_SIZE))
-st.session_state.nynj_page = max(1, min(st.session_state.nynj_page, nynj_total_pages))
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
@@ -421,7 +384,7 @@ def show_company_table(source_df: pd.DataFrame, page_key: str, table_key: str,
                        key=f"export_{table_key}")
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_explorer, tab_nynj, tab_tracker = st.tabs(["Explorer", "NY/NJ (2025–26)", "Job Tracker"])
+tab_explorer, tab_tracker = st.tabs(["Explorer", "Job Tracker"])
 
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_explorer:
@@ -433,19 +396,6 @@ with tab_explorer:
         search_key="company_search",
         drilldown_where=where_sql,
         drilldown_params=tuple(params),
-    )
-
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_nynj:
-    st.caption("Pre-filtered: CERTIFIED · NY + NJ · Fiscal 2025–2026 · Wage Level I & II")
-    show_company_table(
-        source_df=nynj_df,
-        page_key="nynj_page",
-        table_key="nynj_table",
-        search_pending_key="_pending_search_nynj",
-        search_key="nynj_company_search",
-        drilldown_where="",   # show all records for the company in drill-down
-        drilldown_params=(),
     )
 
 # ══════════════════════════════════════════════════════════════════════════════
