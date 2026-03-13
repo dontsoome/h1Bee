@@ -130,8 +130,43 @@ def load_all_companies(use_stats: bool, where_sql: str, params: tuple) -> pd.Dat
         """
         return query_df(sql, tuple(params))
 
+@st.cache_data(ttl=600)
+def load_nynj_companies() -> pd.DataFrame:
+    """Pre-filtered: CERTIFIED, NY+NJ, 2025/2026, Wage Level I/II."""
+    try:
+        return query_df("""
+            SELECT
+                employer_name AS "Company",
+                total_lcas    AS "Total LCAs",
+                unique_roles  AS "Unique Roles",
+                min_salary    AS "Min Salary",
+                avg_salary    AS "Avg Salary",
+                max_salary    AS "Max Salary"
+            FROM company_stats_nynj
+            ORDER BY total_lcas DESC
+        """)
+    except Exception:
+        return query_df("""
+            SELECT
+                employer_name                              AS "Company",
+                COUNT(*)                                   AS "Total LCAs",
+                COUNT(DISTINCT job_title)                  AS "Unique Roles",
+                ROUND(MIN(annual_wage_from)::numeric, 0)   AS "Min Salary",
+                ROUND(AVG(annual_wage_from)::numeric, 0)   AS "Avg Salary",
+                ROUND(MAX(annual_wage_from)::numeric, 0)   AS "Max Salary"
+            FROM lca_records
+            WHERE case_status = 'CERTIFIED'
+              AND worksite_state IN ('NY', 'NJ')
+              AND fiscal_year IN (2025, 2026)
+              AND pw_wage_level = ANY(ARRAY['I', 'II', 'Level I', 'Level II'])
+            GROUP BY employer_name
+            ORDER BY COUNT(*) DESC
+        """)
+
 all_companies_df = load_all_companies(use_stats_view, where_sql, tuple(params))
 company_count = len(all_companies_df)
+
+nynj_df = load_nynj_companies()
 
 # ── Pagination state ──────────────────────────────────────────────────────────
 PAGE_SIZE = 50
@@ -146,6 +181,11 @@ if filter_key != st.session_state.last_filter_key:
     st.session_state.page = 1
     st.session_state.last_filter_key = filter_key
 st.session_state.page = max(1, min(st.session_state.page, total_pages))
+
+if "nynj_page" not in st.session_state:
+    st.session_state.nynj_page = 1
+nynj_total_pages = max(1, -(-len(nynj_df) // PAGE_SIZE))
+st.session_state.nynj_page = max(1, min(st.session_state.nynj_page, nynj_total_pages))
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=300)
@@ -186,7 +226,6 @@ def get_career_url(company: str) -> str:
     return row[0] if row and row[0] else ""
 
 def get_tracked_companies() -> set:
-    """Return the set of company names currently in the tracker (no cache — must be fresh)."""
     rows = query_df("SELECT DISTINCT company FROM job_applications")
     return set(rows["company"].tolist()) if not rows.empty else set()
 
@@ -208,22 +247,16 @@ def remove_from_tracker(company: str):
     conn.close()
 
 def load_tracker() -> pd.DataFrame:
-    sql = """
+    return query_df("""
         SELECT id, company AS "Company", job_title AS "Job Title",
                job_urls AS "Link", stage AS "Status", notes AS "Notes"
         FROM job_applications
         ORDER BY updated_at DESC
-    """
-    return query_df(sql)
+    """)
 
 def save_tracker_changes(changes: dict, base_df: pd.DataFrame):
-    col_map = {
-        "Company":   "company",
-        "Job Title": "job_title",
-        "Link":      "job_urls",
-        "Status":    "stage",
-        "Notes":     "notes",
-    }
+    col_map = {"Company": "company", "Job Title": "job_title",
+               "Link": "job_urls", "Status": "stage", "Notes": "notes"}
     now = datetime.now(timezone.utc).isoformat()
     conn = get_connection()
     for row_idx, col_updates in changes.get("edited_rows", {}).items():
@@ -239,14 +272,8 @@ def save_tracker_changes(changes: dict, base_df: pd.DataFrame):
         conn.execute(
             """INSERT INTO job_applications (company, job_title, job_urls, stage, notes, created_at, updated_at)
                VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-            (
-                row.get("Company", ""),
-                row.get("Job Title", ""),
-                row.get("Link", ""),
-                row.get("Status", "Interested"),
-                row.get("Notes", ""),
-                now, now,
-            ),
+            (row.get("Company", ""), row.get("Job Title", ""), row.get("Link", ""),
+             row.get("Status", "Interested"), row.get("Notes", ""), now, now),
         )
     for row_idx in changes.get("deleted_rows", []):
         row_id = base_df.iloc[row_idx]["id"]
@@ -254,136 +281,172 @@ def save_tracker_changes(changes: dict, base_df: pd.DataFrame):
     conn.commit()
     conn.close()
 
-# ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_explorer, tab_tracker = st.tabs(["Explorer", "Job Tracker"])
+# ── Shared drill-down ─────────────────────────────────────────────────────────
+def show_drilldown(company: str, where_sql: str, params: tuple, key_suffix: str = ""):
+    tracked = get_tracked_companies()
+    with st.container(border=True):
+        col_name, col_btn = st.columns([5, 1])
+        with col_name:
+            st.markdown(f"### {company}")
+        with col_btn:
+            if company in tracked:
+                if st.button("Remove from Tracker", key=f"remove_btn_{key_suffix}", use_container_width=True):
+                    remove_from_tracker(company)
+                    st.rerun()
+            else:
+                if st.button("+ Save to Tracker", key=f"save_btn_{key_suffix}", use_container_width=True):
+                    add_to_tracker(company)
+                    st.rerun()
 
-# ══════════════════════════════════════════════════════════════════════════════
-with tab_explorer:
-    # ── Company search (single source of truth via session state) ─────────────
-    if "company_search" not in st.session_state:
-        st.session_state["company_search"] = ""
-    all_names = [""] + (all_companies_df["Company"].tolist() if not all_companies_df.empty else [])
+        career_url = get_career_url(company)
+        if career_url:
+            st.markdown(f"[Careers Page]({career_url})")
+        else:
+            search_url = "https://www.google.com/search?q=" + urllib.parse.quote(company + " careers")
+            st.markdown(f"[Search Careers on Google]({search_url})")
+
+        df_detail = load_company_detail(company, where_sql, params)
+        st.write(f"**{len(df_detail):,} records** (capped at 500)")
+        st.dataframe(df_detail, use_container_width=True, hide_index=True)
+
+# ── Shared company table + pagination ─────────────────────────────────────────
+def show_company_table(source_df: pd.DataFrame, page_key: str, table_key: str,
+                       search_pending_key: str, search_key: str,
+                       drilldown_where: str = "", drilldown_params: tuple = ()):
+    """Render sort controls, table, pagination, and drill-down for any company DataFrame."""
+    count = len(source_df)
+    total_pg = max(1, -(-count // PAGE_SIZE))
+    st.session_state[page_key] = max(1, min(st.session_state.get(page_key, 1), total_pg))
+
+    # ── Search bar — apply any pending sync from row click ────────────────────
+    if search_pending_key in st.session_state:
+        st.session_state[search_key] = st.session_state.pop(search_pending_key)
+
+    all_names = [""] + source_df["Company"].tolist()
     st.selectbox(
         "Search for a company",
         options=all_names,
         format_func=lambda x: "Type to search a company..." if x == "" else x,
-        key="company_search",
+        key=search_key,
     )
-    search_company = st.session_state["company_search"]
+    search_company = st.session_state.get(search_key, "")
 
-    st.subheader(f"Companies ({company_count:,} results)")
+    st.subheader(f"Companies ({count:,} results)")
 
-    if company_count == 0:
-        st.info("No results. Adjust the sidebar filters.")
-    else:
-        # ── Sort controls ─────────────────────────────────────────────────────
-        sort_cols = [c for c in ["Total LCAs", "Min Salary", "Max Salary", "States", "Company"] if c in all_companies_df.columns]
-        sc1, sc2 = st.columns([3, 1])
-        with sc1:
-            sort_by = st.selectbox("Sort by", sort_cols, index=0, label_visibility="collapsed")
-        with sc2:
-            sort_asc = st.checkbox("Ascending", value=False)
+    if count == 0:
+        st.info("No results.")
+        return
 
-        sorted_df = all_companies_df.sort_values(sort_by, ascending=sort_asc, na_position="last")
-        offset = (st.session_state.page - 1) * PAGE_SIZE
-        df = sorted_df.iloc[offset : offset + PAGE_SIZE].reset_index(drop=True)
+    # ── Sort controls ─────────────────────────────────────────────────────────
+    sort_cols = [c for c in ["Total LCAs", "Min Salary", "Max Salary", "Avg Salary", "States", "Company"]
+                 if c in source_df.columns]
+    sc1, sc2 = st.columns([3, 1])
+    with sc1:
+        sort_by = st.selectbox("Sort by", sort_cols, index=0,
+                               label_visibility="collapsed", key=f"sort_{table_key}")
+    with sc2:
+        sort_asc = st.checkbox("Ascending", value=False, key=f"asc_{table_key}")
 
-        # Format salary columns
-        for col in ["Min Salary", "Avg Salary", "Max Salary"]:
-            if col in df.columns:
-                df[col] = df[col].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "N/A")
+    sorted_df = source_df.sort_values(sort_by, ascending=sort_asc, na_position="last")
+    offset = (st.session_state[page_key] - 1) * PAGE_SIZE
+    page_df = sorted_df.iloc[offset : offset + PAGE_SIZE].reset_index(drop=True)
 
-        selection = st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True,
-            on_select="rerun",
-            selection_mode="single-row",
-            height=600,
-            key="main_table",
+    # Format salary columns for display (copy so cache isn't mutated)
+    display_df = page_df.copy()
+    for col in ["Min Salary", "Avg Salary", "Max Salary"]:
+        if col in display_df.columns:
+            display_df[col] = display_df[col].apply(lambda x: f"${x:,.0f}" if pd.notna(x) else "N/A")
+
+    selection = st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
+        height=600,
+        key=table_key,
+    )
+
+    # ── Pagination controls ───────────────────────────────────────────────────
+    col_prev, col_page, col_info, col_next = st.columns([0.3, 0.4, 2.5, 0.3])
+    with col_prev:
+        prev_clicked = st.button("←", disabled=st.session_state[page_key] <= 1,
+                                 key=f"prev_{table_key}")
+    with col_page:
+        new_page = st.number_input("Page", min_value=1, max_value=total_pg,
+                                   value=st.session_state[page_key],
+                                   label_visibility="collapsed", key=f"pgnum_{table_key}")
+    with col_info:
+        st.markdown(
+            f"<p style='margin:0;padding-top:6px;font-size:0.85rem;color:gray;'>"
+            f"Page {st.session_state[page_key]} of {total_pg:,} ({count:,} companies)</p>",
+            unsafe_allow_html=True,
         )
+    with col_next:
+        next_clicked = st.button("→", disabled=st.session_state[page_key] >= total_pg,
+                                 key=f"next_{table_key}")
 
-        # ── Pagination controls ───────────────────────────────────────────────
-        # Render all three controls first, then handle whichever fired.
-        col_prev, col_page, col_info, col_next = st.columns([0.3, 0.4, 2.5, 0.3])
-        with col_prev:
-            prev_clicked = st.button("←", disabled=st.session_state.page <= 1, key="prev")
-        with col_page:
-            # No key — value= always reflects current page, no stale session state conflict
-            new_page = st.number_input(
-                "Page", min_value=1, max_value=total_pages,
-                value=st.session_state.page,
-                label_visibility="collapsed",
-            )
-        with col_info:
-            st.markdown(
-                f"<p style='margin:0;padding-top:6px;font-size:0.85rem;color:gray;'>"
-                f"Page {st.session_state.page} of {total_pages:,} ({company_count:,} companies)</p>",
-                unsafe_allow_html=True,
-            )
-        with col_next:
-            next_clicked = st.button("→", disabled=st.session_state.page >= total_pages, key="next")
+    if prev_clicked:
+        st.session_state[page_key] -= 1
+        st.rerun()
+    elif next_clicked:
+        st.session_state[page_key] += 1
+        st.rerun()
+    elif int(new_page) != st.session_state[page_key]:
+        st.session_state[page_key] = int(new_page)
+        st.rerun()
 
-        if prev_clicked:
-            st.session_state.page -= 1
-            st.rerun()
-        elif next_clicked:
-            st.session_state.page += 1
-            st.rerun()
-        elif int(new_page) != st.session_state.page:
-            st.session_state.page = int(new_page)
-            st.rerun()
+    # ── Sync row click → search bar (via pending key, applied next render) ────
+    if selection and selection.selection and selection.selection.rows:
+        idx = selection.selection.rows[0]
+        if idx < len(page_df):
+            table_company = page_df.iloc[idx]["Company"]
+            if table_company != search_company:
+                st.session_state[search_pending_key] = table_company
+                st.rerun()
 
-        # ── Sync table row click → search bar ────────────────────────────────
-        if selection and selection.selection and selection.selection.rows:
-            idx = selection.selection.rows[0]
-            if idx < len(df):
-                table_company = df.iloc[idx]["Company"]
-                if table_company != search_company:
-                    st.session_state["company_search"] = table_company
-                    st.rerun()
+    # ── Drill-down ────────────────────────────────────────────────────────────
+    selected_company = search_company or None
+    if selected_company:
+        show_drilldown(selected_company, drilldown_where, drilldown_params,
+                       key_suffix=table_key)
 
-        # ── Company drill-down ────────────────────────────────────────────────
-        selected_company = search_company or None
-        if selected_company:
-            tracked = get_tracked_companies()
-            is_tracked = selected_company in tracked
+    # ── Export ────────────────────────────────────────────────────────────────
+    buf = BytesIO()
+    display_df.to_excel(buf, index=False, engine="openpyxl")
+    buf.seek(0)
+    st.download_button("📥 Export This Page (.xlsx)", data=buf.getvalue(),
+                       file_name="h1b_results.xlsx",
+                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                       key=f"export_{table_key}")
 
-            with st.container(border=True):
-                col_name, col_btn = st.columns([5, 1])
-                with col_name:
-                    st.markdown(f"### {selected_company}")
-                with col_btn:
-                    if is_tracked:
-                        if st.button("Remove from Tracker", key="remove_btn", use_container_width=True):
-                            remove_from_tracker(selected_company)
-                            st.rerun()
-                    else:
-                        if st.button("+ Save to Tracker", key="save_btn", use_container_width=True):
-                            add_to_tracker(selected_company)
-                            st.rerun()
+# ── Tabs ──────────────────────────────────────────────────────────────────────
+tab_explorer, tab_nynj, tab_tracker = st.tabs(["Explorer", "NY/NJ (2025–26)", "Job Tracker"])
 
-                career_url = get_career_url(selected_company)
-                if career_url:
-                    st.markdown(f"[Careers Page]({career_url})")
-                else:
-                    search_url = "https://www.google.com/search?q=" + urllib.parse.quote(selected_company + " careers")
-                    st.markdown(f"[Search Careers on Google]({search_url})")
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_explorer:
+    show_company_table(
+        source_df=all_companies_df,
+        page_key="page",
+        table_key="main_table",
+        search_pending_key="_pending_search",
+        search_key="company_search",
+        drilldown_where=where_sql,
+        drilldown_params=tuple(params),
+    )
 
-                df_detail = load_company_detail(selected_company, where_sql, tuple(params))
-                st.write(f"**{len(df_detail):,} records** (capped at 500)")
-                st.dataframe(df_detail, use_container_width=True, hide_index=True)
-
-        # ── Export ────────────────────────────────────────────────────────────
-        buf = BytesIO()
-        df.to_excel(buf, index=False, engine="openpyxl")
-        buf.seek(0)
-        st.download_button(
-            "📥 Export This Page (.xlsx)",
-            data=buf.getvalue(),
-            file_name="h1b_results.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_nynj:
+    st.caption("Pre-filtered: CERTIFIED · NY + NJ · Fiscal 2025–2026 · Wage Level I & II")
+    show_company_table(
+        source_df=nynj_df,
+        page_key="nynj_page",
+        table_key="nynj_table",
+        search_pending_key="_pending_search_nynj",
+        search_key="nynj_company_search",
+        drilldown_where="",   # show all records for the company in drill-down
+        drilldown_params=(),
+    )
 
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_tracker:
@@ -393,7 +456,7 @@ with tab_tracker:
     STAGES = ["Interested", "Applied", "Phone Screen", "Interview", "Offer", "Rejected"]
 
     if tracker_df.empty:
-        st.info("No saved companies yet. Select a company in the Explorer tab and click '+ Save to Tracker'.")
+        st.info("No saved companies yet. Select a company and click '+ Save to Tracker'.")
 
     col_config = {
         "id":        None,
@@ -418,7 +481,6 @@ with tab_tracker:
         changes = st.session_state.get("tracker_editor", {})
         if any(changes.get(k) for k in ("edited_rows", "added_rows", "deleted_rows")):
             save_tracker_changes(changes, tracker_df)
-            st.cache_data.clear()
             st.success("Changes saved.")
             st.rerun()
         else:

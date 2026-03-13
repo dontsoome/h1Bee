@@ -45,6 +45,29 @@ steps = [
      "CREATE INDEX ON company_stats(case_status, total_lcas DESC)"),
     ("Index on company_stats(employer_name)",
      "CREATE INDEX ON company_stats(employer_name)"),
+    ("Drop NY/NJ materialized view if exists",
+     "DROP MATERIALIZED VIEW IF EXISTS company_stats_nynj"),
+    ("Create materialized view company_stats_nynj", """
+        CREATE MATERIALIZED VIEW company_stats_nynj AS
+        SELECT
+            employer_name,
+            COUNT(*)                                 AS total_lcas,
+            COUNT(DISTINCT job_title)                AS unique_roles,
+            ROUND(MIN(annual_wage_from)::numeric, 0) AS min_salary,
+            ROUND(AVG(annual_wage_from)::numeric, 0) AS avg_salary,
+            ROUND(MAX(annual_wage_from)::numeric, 0) AS max_salary
+        FROM lca_records
+        WHERE case_status = 'CERTIFIED'
+          AND worksite_state IN ('NY', 'NJ')
+          AND fiscal_year IN (2025, 2026)
+          AND pw_wage_level = ANY(ARRAY['I', 'II', 'Level I', 'Level II'])
+        GROUP BY employer_name
+        WITH DATA
+    """),
+    ("Index on company_stats_nynj(total_lcas)",
+     "CREATE INDEX ON company_stats_nynj(total_lcas DESC)"),
+    ("Index on company_stats_nynj(employer_name)",
+     "CREATE INDEX ON company_stats_nynj(employer_name)"),
     ("Enable pg_trgm extension",
      "CREATE EXTENSION IF NOT EXISTS pg_trgm"),
     ("Trigram index on lca_records(employer_name)",
