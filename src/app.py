@@ -38,7 +38,14 @@ except Exception as e:
     st.error(f"Could not connect to database: {e}")
     st.stop()
 
-ensure_job_listings_table()
+@st.cache_resource
+def _init_job_listings():
+    try:
+        ensure_job_listings_table()
+    except Exception:
+        pass  # Non-fatal — table may already exist
+
+_init_job_listings()
 
 # ── Cached filter options + total count (single DB connection) ────────────────
 @st.cache_data(ttl=3600, show_spinner="Loading...")
