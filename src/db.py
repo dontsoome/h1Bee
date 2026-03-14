@@ -120,6 +120,7 @@ def create_tables():
         "CREATE INDEX IF NOT EXISTS idx_fiscal_year ON lca_records(fiscal_year)",
         "CREATE INDEX IF NOT EXISTS idx_case_status ON lca_records(case_status)",
         "CREATE INDEX IF NOT EXISTS idx_job_title ON lca_records(job_title)",
+        "CREATE INDEX IF NOT EXISTS idx_pw_wage_level ON lca_records(pw_wage_level)",
         """CREATE TABLE IF NOT EXISTS career_urls (
             employer_name TEXT PRIMARY KEY,
             career_url TEXT,
@@ -206,3 +207,22 @@ def get_distinct_values(column: str) -> list[str]:
     ).fetchall()
     conn.close()
     return [r[0] for r in rows]
+
+
+def get_all_filter_options() -> dict:
+    """Fetch all sidebar filter options in a single DB connection."""
+    conn = get_connection()
+    result = {}
+    for col, key in [
+        ("case_status", "statuses"),
+        ("fiscal_year", "years"),
+        ("worksite_state", "states"),
+        ("pw_wage_level", "levels"),
+    ]:
+        rows = conn.execute(
+            f"SELECT DISTINCT {col} FROM lca_records WHERE {col} IS NOT NULL ORDER BY {col}"
+        ).fetchall()
+        result[key] = [r[0] for r in rows]
+    result["total_count"] = conn.execute("SELECT COUNT(*) FROM lca_records").fetchone()[0]
+    conn.close()
+    return result

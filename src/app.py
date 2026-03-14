@@ -22,7 +22,7 @@ if "DATABASE_URL" not in os.environ:
         st.error(f"Error reading Streamlit secrets: {e}")
         st.stop()
 
-from db import get_connection, query_df, get_distinct_values
+from db import get_connection, query_df, get_distinct_values, get_all_filter_options
 from filters import build_where_clause
 
 st.set_page_config(page_title="H1BEE — H-1B Explorer", layout="wide")
@@ -36,26 +36,13 @@ except Exception as e:
     st.error(f"Could not connect to database: {e}")
     st.stop()
 
-# ── Cached filter options ─────────────────────────────────────────────────────
-@st.cache_data(ttl=3600)
+# ── Cached filter options + total count (single DB connection) ────────────────
+@st.cache_data(ttl=3600, show_spinner="Loading...")
 def load_filter_options():
-    return {
-        "statuses": get_distinct_values("case_status"),
-        "years":    get_distinct_values("fiscal_year"),
-        "states":   get_distinct_values("worksite_state"),
-        "levels":   get_distinct_values("pw_wage_level"),
-    }
-
-@st.cache_data(ttl=3600)
-def get_total_count():
-    conn = get_connection()
-    n = conn.execute("SELECT COUNT(*) FROM lca_records").fetchone()[0]
-    conn.close()
-    return n
+    return get_all_filter_options()
 
 opts = load_filter_options()
-total_records = get_total_count()
-st.caption(f"{total_records:,} total LCA records")
+st.caption(f"{opts['total_count']:,} total LCA records")
 
 # ── Sidebar filters (wrapped in form — query only fires on Apply) ─────────────
 st.sidebar.header("Filters")
@@ -95,15 +82,16 @@ use_stats_view = not any(k in filters for k in HEAVY_FILTERS)
 
 # ── Load all companies (cached; pagination done in Python) ────────────────────
 @st.cache_data(ttl=300)
-def load_all_companies(use_stats: bool, where_sql: str, params: tuple) -> pd.DataFrame:
+def load_all_companies(use_stats: bool, where_sql: str, params: tuple,
+                       stats_statuses: tuple, stats_employer: str) -> pd.DataFrame:
     if use_stats:
         clauses, p = [], []
-        if selected_statuses:
-            clauses.append("case_status IN (" + ",".join(["%s"]*len(selected_statuses)) + ")")
-            p.extend(selected_statuses)
-        if employer_input.strip():
+        if stats_statuses:
+            clauses.append("case_status IN (" + ",".join(["%s"] * len(stats_statuses)) + ")")
+            p.extend(stats_statuses)
+        if stats_employer:
             clauses.append("employer_name LIKE %s")
-            p.append(f"%{employer_input.strip().upper()}%")
+            p.append(f"%{stats_employer.upper()}%")
         w = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         sql = f"""
             SELECT
@@ -133,7 +121,11 @@ def load_all_companies(use_stats: bool, where_sql: str, params: tuple) -> pd.Dat
         """
         return query_df(sql, tuple(params))
 
-all_companies_df = load_all_companies(use_stats_view, where_sql, tuple(params))
+all_companies_df = load_all_companies(
+    use_stats_view, where_sql, tuple(params),
+    stats_statuses=tuple(selected_statuses),
+    stats_employer=employer_input.strip(),
+)
 company_count = len(all_companies_df)
 
 # ── Pagination state ──────────────────────────────────────────────────────────
@@ -188,6 +180,7 @@ def get_career_url(company: str) -> str:
     conn.close()
     return row[0] if row and row[0] else ""
 
+@st.cache_data(ttl=60)
 def get_tracked_companies() -> set:
     rows = query_df("SELECT DISTINCT company FROM job_applications")
     return set(rows["company"].tolist()) if not rows.empty else set()
