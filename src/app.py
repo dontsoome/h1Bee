@@ -6,7 +6,7 @@ import pandas as pd
 import os
 import sys
 import urllib.parse
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from io import BytesIO
 
 sys.path.insert(0, os.path.dirname(__file__))
@@ -22,19 +22,23 @@ if "DATABASE_URL" not in os.environ:
         st.error(f"Error reading Streamlit secrets: {e}")
         st.stop()
 
-from db import get_connection, query_df, get_distinct_values, get_all_filter_options
+from db import (get_connection, query_df, get_distinct_values, get_all_filter_options,
+                ensure_job_listings_table, get_cached_jobs, upsert_job_listings)
 from filters import build_where_clause
+from scraper import scrape_jobs, detect_ats
 
 st.set_page_config(page_title="H1BEE — H-1B Explorer", layout="wide")
 st.title("H1BEE — H-1B LCA Data Explorer")
 
-# ── DB connection check ───────────────────────────────────────────────────────
+# ── DB connection check + one-time table migration ────────────────────────────
 try:
     _c = get_connection()
     _c.close()
 except Exception as e:
     st.error(f"Could not connect to database: {e}")
     st.stop()
+
+ensure_job_listings_table()
 
 # ── Cached filter options + total count (single DB connection) ────────────────
 @st.cache_data(ttl=3600, show_spinner="Loading...")
@@ -237,6 +241,102 @@ def save_tracker_changes(changes: dict, base_df: pd.DataFrame):
     conn.commit()
     conn.close()
 
+# ── Job listing helpers ───────────────────────────────────────────────────────
+def _is_stale(scraped_at_str: str, hours: int = 6) -> bool:
+    if not scraped_at_str:
+        return True
+    try:
+        scraped = datetime.fromisoformat(str(scraped_at_str).replace("Z", "+00:00"))
+        if scraped.tzinfo is None:
+            scraped = scraped.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc) - scraped) > timedelta(hours=hours)
+    except Exception:
+        return True
+
+
+def _format_age(scraped_at_str: str) -> str:
+    if not scraped_at_str:
+        return "unknown"
+    try:
+        scraped = datetime.fromisoformat(str(scraped_at_str).replace("Z", "+00:00"))
+        if scraped.tzinfo is None:
+            scraped = scraped.replace(tzinfo=timezone.utc)
+        delta = datetime.now(timezone.utc) - scraped
+        hours = delta.total_seconds() / 3600
+        if hours < 1:
+            return f"{int(delta.total_seconds() / 60)}m ago"
+        elif hours < 24:
+            return f"{hours:.1f}h ago"
+        return f"{delta.days}d ago"
+    except Exception:
+        return "unknown"
+
+
+def _show_jobs_section(company: str, career_url: str, key_suffix: str):
+    st.markdown("#### Open Positions")
+
+    if not career_url:
+        search_url = "https://www.google.com/search?q=" + urllib.parse.quote(company + " jobs")
+        st.caption(f"No career page on file. [Search for jobs on Google]({search_url})")
+        return
+
+    ats, _ = detect_ats(career_url)
+    if ats in ("workday", "unknown"):
+        st.caption(
+            f"Auto-scraping not supported for this career page "
+            f"({'Workday' if ats == 'workday' else 'unknown ATS'}). "
+            f"[Browse jobs directly]({career_url})"
+        )
+        return
+
+    jobs, cached_ats, scraped_at = get_cached_jobs(company)
+    stale = _is_stale(scraped_at)
+
+    col_info, col_btn = st.columns([4, 1])
+    with col_info:
+        if jobs:
+            st.caption(f"{len(jobs)} jobs via **{cached_ats}** · scraped {_format_age(scraped_at)}")
+        else:
+            st.caption(f"No jobs fetched yet · **{ats}** detected")
+    with col_btn:
+        btn_label = "Refresh" if jobs else "Fetch Jobs"
+        if st.button(btn_label, key=f"fetch_jobs_{key_suffix}", use_container_width=True):
+            with st.spinner("Fetching jobs..."):
+                new_jobs, new_ats = scrape_jobs(career_url)
+            upsert_job_listings(company, new_jobs, new_ats)
+            st.rerun()
+
+    if not jobs:
+        return
+
+    kw = st.text_input(
+        "Filter jobs", placeholder="e.g. engineer, analyst, manager",
+        key=f"job_filter_{key_suffix}", label_visibility="collapsed",
+    )
+
+    filtered = jobs
+    if kw.strip():
+        kw_lower = kw.strip().lower()
+        filtered = [
+            j for j in jobs
+            if kw_lower in j["title"].lower() or kw_lower in j.get("department", "").lower()
+        ]
+
+    if not filtered:
+        st.caption("No jobs match that filter.")
+        return
+
+    df_jobs = pd.DataFrame(filtered)[["title", "location", "department", "url"]]
+    df_jobs.columns = ["Job Title", "Location", "Department", "Link"]
+    st.dataframe(
+        df_jobs,
+        use_container_width=True,
+        hide_index=True,
+        column_config={"Link": st.column_config.LinkColumn("Link", display_text="Apply →")},
+        height=min(450, 38 + len(filtered) * 35),
+    )
+
+
 # ── Shared drill-down ─────────────────────────────────────────────────────────
 def show_drilldown(company: str, where_sql: str, params: tuple, key_suffix: str = ""):
     tracked = get_tracked_companies()
@@ -261,9 +361,12 @@ def show_drilldown(company: str, where_sql: str, params: tuple, key_suffix: str 
             search_url = "https://www.google.com/search?q=" + urllib.parse.quote(company + " careers")
             st.markdown(f"[Search Careers on Google]({search_url})")
 
-        df_detail = load_company_detail(company, where_sql, params)
-        st.write(f"**{len(df_detail):,} records** (capped at 500)")
-        st.dataframe(df_detail, use_container_width=True, hide_index=True)
+        _show_jobs_section(company, career_url, key_suffix)
+
+        with st.expander(f"H-1B LCA Records", expanded=False):
+            df_detail = load_company_detail(company, where_sql, params)
+            st.write(f"**{len(df_detail):,} records** (capped at 500)")
+            st.dataframe(df_detail, use_container_width=True, hide_index=True)
 
 # ── Shared company table + pagination ─────────────────────────────────────────
 def show_company_table(source_df: pd.DataFrame, page_key: str, table_key: str,

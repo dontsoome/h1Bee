@@ -4,3 +4,4 @@ openpyxl
 anthropic
 python-dotenv
 psycopg2-binary
+requests

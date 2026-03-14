@@ -151,6 +151,18 @@ def create_tables():
             created_at TEXT,
             updated_at TEXT
         )""",
+        """CREATE TABLE IF NOT EXISTS job_listings (
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            employer_name TEXT NOT NULL,
+            job_title TEXT NOT NULL DEFAULT '',
+            job_url TEXT NOT NULL DEFAULT '',
+            department TEXT NOT NULL DEFAULT '',
+            location TEXT NOT NULL DEFAULT '',
+            ats_platform TEXT NOT NULL DEFAULT '',
+            scraped_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE(employer_name, job_url)
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_job_listings_employer ON job_listings(employer_name)",
     ]
     for stmt in stmts:
         conn.execute(stmt)
@@ -207,6 +219,80 @@ def get_distinct_values(column: str) -> list[str]:
     ).fetchall()
     conn.close()
     return [r[0] for r in rows]
+
+
+def ensure_job_listings_table():
+    """Idempotent — creates job_listings table if it doesn't exist yet."""
+    conn = get_connection()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS job_listings (
+            id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+            employer_name TEXT NOT NULL,
+            job_title TEXT NOT NULL DEFAULT '',
+            job_url TEXT NOT NULL DEFAULT '',
+            department TEXT NOT NULL DEFAULT '',
+            location TEXT NOT NULL DEFAULT '',
+            ats_platform TEXT NOT NULL DEFAULT '',
+            scraped_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE(employer_name, job_url)
+        )
+    """)
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_job_listings_employer ON job_listings(employer_name)"
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_cached_jobs(employer_name: str) -> tuple[list[dict], str, str]:
+    """
+    Returns (jobs, ats_platform, scraped_at_str).
+    Returns ([], '', '') if no listings found.
+    """
+    conn = get_connection()
+    rows = conn.execute(
+        """SELECT job_title, job_url, department, location, ats_platform, scraped_at::text
+           FROM job_listings
+           WHERE employer_name = %s
+           ORDER BY job_title""",
+        (employer_name,),
+    ).fetchall()
+    conn.close()
+    if not rows:
+        return [], "", ""
+    jobs = [{"title": r[0], "url": r[1], "department": r[2], "location": r[3]} for r in rows]
+    return jobs, rows[0][4], rows[0][5] or ""
+
+
+def upsert_job_listings(employer_name: str, jobs: list[dict], ats_platform: str):
+    """Replace all job listings for a company with freshly scraped data."""
+    conn = get_connection()
+    conn.execute("DELETE FROM job_listings WHERE employer_name = %s", (employer_name,))
+    conn.commit()
+    conn.close()
+    if not jobs:
+        return
+    rows = [
+        (employer_name, j["title"], j["url"],
+         j.get("department", ""), j.get("location", ""), ats_platform)
+        for j in jobs
+        if j.get("url")  # skip any jobs without a URL
+    ]
+    if not rows:
+        return
+    raw = psycopg2.connect(_get_database_url())
+    cur = raw.cursor()
+    psycopg2.extras.execute_values(
+        cur,
+        """INSERT INTO job_listings (employer_name, job_title, job_url, department, location, ats_platform)
+           VALUES %s
+           ON CONFLICT (employer_name, job_url) DO UPDATE
+           SET job_title=EXCLUDED.job_title, department=EXCLUDED.department,
+               location=EXCLUDED.location, scraped_at=NOW()""",
+        rows,
+    )
+    raw.commit()
+    raw.close()
 
 
 def get_all_filter_options() -> dict:
