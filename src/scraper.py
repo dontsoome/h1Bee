@@ -1,6 +1,7 @@
 """ATS job scraper — Greenhouse, Lever, Ashby with slug-index + brute-force detection."""
 
 from __future__ import annotations
+import os
 import re
 import threading
 import requests
@@ -170,6 +171,45 @@ _PROBES = [
 ]
 
 
+# ── Brave Search fallback ─────────────────────────────────────────────────────
+
+def _search_brave_ats(company_name: str) -> tuple[str, str, str] | None:
+    """
+    Use Brave Search API to find a company's ATS URL.
+    Returns (ats_name, slug, ats_url) or None if not found / API key missing.
+    Consumes 1 query from the free tier (2,000/month).
+    """
+    api_key = os.environ.get("BRAVE_API_KEY")
+    if not api_key:
+        return None
+
+    clean = re.sub(r"[^a-z0-9\s]", " ", company_name.lower()).strip()
+    query = f"{clean} jobs greenhouse.io OR lever.co OR ashbyhq.com"
+
+    try:
+        r = requests.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            headers={
+                "Accept": "application/json",
+                "Accept-Encoding": "gzip",
+                "X-Subscription-Token": api_key,
+            },
+            params={"q": query, "count": 10},
+            timeout=8,
+        )
+        r.raise_for_status()
+        results = r.json().get("web", {}).get("results", [])
+        for result in results:
+            url = result.get("url", "")
+            ats, slug = detect_ats(url)
+            if ats != "unknown":
+                ats_url = url if ats == "workday" else _ats_canonical_url(ats, slug)
+                return ats, slug, ats_url
+    except Exception:
+        pass
+    return None
+
+
 # ── Full ATS detection ────────────────────────────────────────────────────────
 
 def detect_ats_for_company(company_name: str, career_url: str = "") -> tuple[str, str, str]:
@@ -207,7 +247,12 @@ def detect_ats_for_company(company_name: str, career_url: str = "") -> tuple[str
             ats_url = identifier if ats_name == "workday" else _ats_canonical_url(ats_name, identifier)
             return ats_name, identifier, ats_url
 
-    # Step 4 — parallel HTTP probe fallback (for companies not in the index)
+    # Step 4 — Brave Search API (catches slugs that don't derive from the name)
+    brave = _search_brave_ats(company_name)
+    if brave:
+        return brave
+
+    # Step 5 — parallel HTTP probe fallback (for companies not in the index)
     slugs = _slug_variants(company_name)
     tasks = [(ats_name, slug, probe) for slug in slugs for ats_name, probe in _PROBES]
 

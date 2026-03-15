@@ -22,6 +22,13 @@ if "DATABASE_URL" not in os.environ:
         st.error(f"Error reading Streamlit secrets: {e}")
         st.stop()
 
+# Inject optional Brave Search API key (enables ATS auto-detection fallback)
+if "BRAVE_API_KEY" not in os.environ:
+    try:
+        os.environ["BRAVE_API_KEY"] = st.secrets["BRAVE_API_KEY"]
+    except (KeyError, Exception):
+        pass  # Optional — Brave fallback just won't run without it
+
 from db import (get_connection, query_df, get_distinct_values, get_all_filter_options,
                 ensure_job_listings_table, get_cached_jobs, upsert_job_listings)
 from filters import build_where_clause
@@ -309,12 +316,40 @@ def _show_jobs_section(company: str, career_url: str, key_suffix: str):
                 fallback = career_url or (
                     "https://www.google.com/search?q=" + urllib.parse.quote(company + " jobs")
                 )
-                st.warning(
-                    f"Could not auto-scrape ({'Workday — manual browsing required' if new_ats == 'workday' else 'ATS not detected'}). "
-                    f"[Browse directly]({fallback})"
-                )
+                msg = "Workday — manual browsing required" if new_ats == "workday" else "ATS not detected"
+                st.warning(f"Could not auto-scrape ({msg}). [Browse directly]({fallback})")
+                if new_ats != "workday":
+                    st.session_state[f"_show_url_override_{key_suffix}"] = True
             else:
                 upsert_job_listings(company, new_jobs, new_ats)
+                st.rerun()
+
+    # Manual URL override — shown after a failed fetch, or via expander
+    override_key = f"_show_url_override_{key_suffix}"
+    if st.session_state.get(override_key) or st.checkbox(
+        "Set ATS URL manually", key=f"_url_override_toggle_{key_suffix}", value=False
+    ):
+        st.session_state[override_key] = True
+        manual_url = st.text_input(
+            "Paste Greenhouse / Lever / Ashby URL:",
+            placeholder="https://job-boards.greenhouse.io/yourcompany",
+            key=f"_manual_url_{key_suffix}",
+        )
+        if st.button("Save & Fetch", key=f"_manual_save_{key_suffix}"):
+            url_to_save = manual_url.strip()
+            if url_to_save:
+                conn = get_connection()
+                conn.execute(
+                    """INSERT INTO career_urls (employer_name, career_url, looked_up_at)
+                       VALUES (%s, %s, %s)
+                       ON CONFLICT (employer_name) DO UPDATE
+                       SET career_url=EXCLUDED.career_url, looked_up_at=EXCLUDED.looked_up_at""",
+                    (company, url_to_save, datetime.now(timezone.utc).isoformat()),
+                )
+                conn.commit()
+                conn.close()
+                get_career_url.clear()
+                st.session_state.pop(override_key, None)
                 st.rerun()
 
     if not jobs:
