@@ -114,28 +114,29 @@ _PROBES = [
 
 # ── Full ATS detection ────────────────────────────────────────────────────────
 
-def detect_ats_for_company(company_name: str, career_url: str = "") -> tuple[str, str]:
+def detect_ats_for_company(company_name: str, career_url: str = "") -> tuple[str, str, str]:
     """
     Best-effort ATS detection pipeline:
       1. Pattern-match the stored career URL
       2. Follow redirects on the career URL
       3. Parallel brute-force slug probes
 
-    Returns (ats_name, slug_or_identifier).
+    Returns (ats_name, slug, detected_ats_url).
+    detected_ats_url is the canonical ATS URL found (empty string if same as input or not found).
     ats_name: 'greenhouse' | 'lever' | 'ashby' | 'workday' | 'unknown'
     """
     # Step 1 — direct URL pattern
     if career_url:
         ats, slug = detect_ats(career_url)
         if ats != "unknown":
-            return ats, slug
+            return ats, slug, ""  # already have the right URL stored
 
         # Step 2 — follow redirects
         try:
             r = requests.get(career_url, headers=HEADERS, timeout=TIMEOUT, allow_redirects=True)
             ats, slug = detect_ats(r.url)
             if ats != "unknown":
-                return ats, slug
+                return ats, slug, r.url  # save this better URL
         except Exception:
             pass
 
@@ -148,11 +149,23 @@ def detect_ats_for_company(company_name: str, career_url: str = "") -> tuple[str
         for fut in as_completed(futures):
             try:
                 if fut.result():
-                    return futures[fut]
+                    ats_name, slug = futures[fut]
+                    ats_url = _ats_canonical_url(ats_name, slug)
+                    return ats_name, slug, ats_url
             except Exception:
                 pass
 
-    return "unknown", ""
+    return "unknown", "", ""
+
+
+def _ats_canonical_url(ats_name: str, slug: str) -> str:
+    if ats_name == "greenhouse":
+        return f"https://job-boards.greenhouse.io/{slug}"
+    if ats_name == "lever":
+        return f"https://jobs.lever.co/{slug}"
+    if ats_name == "ashby":
+        return f"https://jobs.ashbyhq.com/{slug}"
+    return ""
 
 
 # ── Scrapers ──────────────────────────────────────────────────────────────────
@@ -204,14 +217,17 @@ def scrape_ashby(slug: str) -> list[dict]:
             headers=HEADERS, timeout=TIMEOUT,
         )
         r.raise_for_status()
+        data = r.json()
+        # API returns "jobs" (newer) or "jobPostings" (older boards)
+        job_list = data.get("jobs") or data.get("jobPostings") or []
         return [
             {
                 "title": j.get("title", ""),
                 "url": j.get("jobUrl", "") or j.get("applyUrl", ""),
-                "location": j.get("locationName", ""),
-                "department": j.get("departmentName", ""),
+                "location": j.get("location", "") or j.get("locationName", ""),
+                "department": j.get("department", "") or j.get("departmentName", ""),
             }
-            for j in r.json().get("jobPostings", [])
+            for j in job_list
         ]
     except Exception:
         return []
@@ -219,17 +235,19 @@ def scrape_ashby(slug: str) -> list[dict]:
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-def scrape_jobs(career_url: str, company_name: str = "") -> tuple[list[dict], str]:
+def scrape_jobs(career_url: str, company_name: str = "") -> tuple[list[dict], str, str]:
     """
-    Detect ATS and scrape jobs. Returns (jobs, ats_platform).
+    Detect ATS and scrape jobs.
+    Returns (jobs, ats_platform, detected_ats_url).
+    detected_ats_url is non-empty when a better URL was found via redirect/brute-force.
     Each job: {title, url, location, department}
     """
-    ats, identifier = detect_ats_for_company(company_name, career_url)
+    ats, identifier, detected_url = detect_ats_for_company(company_name, career_url)
 
     if ats == "greenhouse":
-        return scrape_greenhouse(identifier), "greenhouse"
+        return scrape_greenhouse(identifier), "greenhouse", detected_url
     if ats == "lever":
-        return scrape_lever(identifier), "lever"
+        return scrape_lever(identifier), "lever", detected_url
     if ats == "ashby":
-        return scrape_ashby(identifier), "ashby"
-    return [], ats
+        return scrape_ashby(identifier), "ashby", detected_url
+    return [], ats, ""

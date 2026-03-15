@@ -31,15 +31,22 @@ def get_unlookedup_employers() -> list[str]:
 def lookup_batch(client, companies: list[str]) -> dict[str, str]:
     """Ask Haiku for career page URLs for a batch of companies."""
     company_list = "\n".join(f"- {c}" for c in companies)
-    prompt = f"""For each company below, provide the most likely career/jobs page URL.
-Consider common ATS platforms (Greenhouse, Lever, Ashby, Workday, iCIMS, SmartRecruiters, BambooHR) and direct /careers or /jobs pages.
-If you are not confident about the URL for a company, use an empty string.
+    prompt = f"""For each company below, return their job board URL.
+
+PRIORITY: If the company uses one of these ATS platforms, return the ATS URL directly (not their main website):
+- Greenhouse: https://job-boards.greenhouse.io/[slug]  or  https://boards.greenhouse.io/[slug]
+- Lever:      https://jobs.lever.co/[slug]
+- Ashby:      https://jobs.ashbyhq.com/[slug]
+- Workday:    https://[company].wd5.myworkdayjobs.com/[path]
+
+Only fall back to the company's own /careers or /jobs page if you don't know their ATS.
+If you are not confident about any URL, use an empty string.
 
 Companies:
 {company_list}
 
-Respond with ONLY a JSON object mapping company name (exactly as given) to career URL string. Example:
-{{"ACME CORP": "https://acme.com/careers", "UNKNOWN LLC": ""}}"""
+Respond with ONLY a JSON object mapping company name (exactly as given) to URL string. Example:
+{{"ACME CORP": "https://job-boards.greenhouse.io/acme", "UNKNOWN LLC": ""}}"""
 
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",

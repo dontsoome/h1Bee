@@ -294,7 +294,17 @@ def _show_jobs_section(company: str, career_url: str, key_suffix: str):
         btn_label = "Refresh" if jobs else "Fetch Jobs"
         if st.button(btn_label, key=f"fetch_jobs_{key_suffix}", use_container_width=True):
             with st.spinner("Detecting ATS and fetching jobs..."):
-                new_jobs, new_ats = scrape_jobs(career_url, company_name=company)
+                new_jobs, new_ats, detected_url = scrape_jobs(career_url, company_name=company)
+            # If we found a better ATS URL via redirect/brute-force, save it
+            if detected_url and detected_url != career_url:
+                conn = get_connection()
+                conn.execute(
+                    "UPDATE career_urls SET career_url = %s WHERE employer_name = %s",
+                    (detected_url, company),
+                )
+                conn.commit()
+                conn.close()
+                get_career_url.clear()
             if new_ats in ("unknown", "workday") and not new_jobs:
                 fallback = career_url or (
                     "https://www.google.com/search?q=" + urllib.parse.quote(company + " jobs")
