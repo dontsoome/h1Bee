@@ -1,14 +1,66 @@
-"""ATS job scraper — Greenhouse, Lever, Ashby with brute-force detection."""
+"""ATS job scraper — Greenhouse, Lever, Ashby with slug-index + brute-force detection."""
 
 from __future__ import annotations
 import re
+import threading
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; H1BEE/1.0)"}
-TIMEOUT = 6   # per individual HTTP request
-PROBE_TIMEOUT = 4  # for ATS probe requests
+TIMEOUT = 6
+PROBE_TIMEOUT = 4
+
+_SLUG_INDEX_URLS = {
+    "greenhouse": "https://raw.githubusercontent.com/Feashliaa/job-board-aggregator/main/data/greenhouse_companies.json",
+    "lever":      "https://raw.githubusercontent.com/Feashliaa/job-board-aggregator/main/data/lever_companies.json",
+    "ashby":      "https://raw.githubusercontent.com/Feashliaa/job-board-aggregator/main/data/ashby_companies.json",
+    "workday":    "https://raw.githubusercontent.com/Feashliaa/job-board-aggregator/main/data/workday_companies.json",
+}
+
+# Module-level cache — loaded once per process
+_slug_sets: dict[str, set[str]] = {}           # greenhouse/lever/ashby → set of slugs
+_workday_map: dict[str, str] = {}              # company_slug → full workday URL
+_index_loaded = False
+_index_lock = threading.Lock()
+
+
+def _load_slug_index():
+    """Download ATS slug lists once and cache in memory."""
+    global _slug_sets, _workday_map, _index_loaded
+    with _index_lock:
+        if _index_loaded:
+            return
+        for ats, url in _SLUG_INDEX_URLS.items():
+            try:
+                r = requests.get(url, headers=HEADERS, timeout=10)
+                r.raise_for_status()
+                data = r.json()
+                if ats == "workday":
+                    # Format: "company|wdN|site_slug"
+                    for entry in data:
+                        parts = str(entry).split("|")
+                        if len(parts) == 3:
+                            company_slug, instance, site = parts
+                            _workday_map[company_slug] = (
+                                f"https://{company_slug}.{instance}.myworkdayjobs.com/{site}"
+                            )
+                else:
+                    _slug_sets[ats] = set(data)
+            except Exception:
+                _slug_sets.setdefault(ats, set())
+        _index_loaded = True
+
+
+def _index_lookup(slug: str) -> tuple[str, str] | None:
+    """Check slug against loaded index. Returns (ats_name, slug) or None."""
+    _load_slug_index()
+    for ats in ("greenhouse", "lever", "ashby"):
+        if slug in _slug_sets.get(ats, set()):
+            return ats, slug
+    if slug in _workday_map:
+        return "workday", _workday_map[slug]
+    return None
 
 
 # ── ATS URL detection ─────────────────────────────────────────────────────────
@@ -125,22 +177,31 @@ def detect_ats_for_company(company_name: str, career_url: str = "") -> tuple[str
     detected_ats_url is the canonical ATS URL found (empty string if same as input or not found).
     ats_name: 'greenhouse' | 'lever' | 'ashby' | 'workday' | 'unknown'
     """
-    # Step 1 — direct URL pattern
+    # Step 1 — direct URL pattern match
     if career_url:
         ats, slug = detect_ats(career_url)
         if ats != "unknown":
-            return ats, slug, ""  # already have the right URL stored
+            return ats, slug, ""
 
         # Step 2 — follow redirects
         try:
             r = requests.get(career_url, headers=HEADERS, timeout=TIMEOUT, allow_redirects=True)
             ats, slug = detect_ats(r.url)
             if ats != "unknown":
-                return ats, slug, r.url  # save this better URL
+                return ats, slug, r.url
         except Exception:
             pass
 
-    # Step 3 — parallel brute-force
+    # Step 3 — slug index lookup (fast, no HTTP probes needed)
+    for variant in _slug_variants(company_name):
+        result = _index_lookup(variant)
+        if result:
+            ats_name, identifier = result
+            # identifier is either a slug (greenhouse/lever/ashby) or full URL (workday)
+            ats_url = identifier if ats_name == "workday" else _ats_canonical_url(ats_name, identifier)
+            return ats_name, identifier, ats_url
+
+    # Step 4 — parallel HTTP probe fallback (for companies not in the index)
     slugs = _slug_variants(company_name)
     tasks = [(ats_name, slug, probe) for slug in slugs for ats_name, probe in _PROBES]
 
@@ -250,4 +311,7 @@ def scrape_jobs(career_url: str, company_name: str = "") -> tuple[list[dict], st
         return scrape_lever(identifier), "lever", detected_url
     if ats == "ashby":
         return scrape_ashby(identifier), "ashby", detected_url
-    return [], ats, ""
+    if ats == "workday":
+        # identifier is the full Workday URL — return it so UI can show a direct link
+        return [], "workday", identifier or detected_url
+    return [], "unknown", ""
