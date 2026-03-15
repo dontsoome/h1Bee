@@ -75,7 +75,7 @@ def _slug_variants(company_name: str) -> list[str]:
 def _probe_greenhouse(slug: str) -> bool:
     try:
         r = requests.get(
-            f"https://boards.greenhouse.io/embed/job_board/jobs?for={slug}",
+            f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs",
             headers=HEADERS, timeout=PROBE_TIMEOUT,
         )
         return r.status_code == 200 and "jobs" in r.text
@@ -160,7 +160,7 @@ def detect_ats_for_company(company_name: str, career_url: str = "") -> tuple[str
 def scrape_greenhouse(slug: str) -> list[dict]:
     try:
         r = requests.get(
-            f"https://boards.greenhouse.io/embed/job_board/jobs?for={slug}",
+            f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs",
             headers=HEADERS, timeout=TIMEOUT,
         )
         r.raise_for_status()
