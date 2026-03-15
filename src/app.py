@@ -25,7 +25,7 @@ if "DATABASE_URL" not in os.environ:
 from db import (get_connection, query_df, get_distinct_values, get_all_filter_options,
                 ensure_job_listings_table, get_cached_jobs, upsert_job_listings)
 from filters import build_where_clause
-from scraper import scrape_jobs, detect_ats
+from scraper import scrape_jobs
 
 st.set_page_config(page_title="H1BEE — H-1B Explorer", layout="wide")
 st.title("H1BEE — H-1B LCA Data Explorer")
@@ -282,36 +282,30 @@ def _format_age(scraped_at_str: str) -> str:
 def _show_jobs_section(company: str, career_url: str, key_suffix: str):
     st.markdown("#### Open Positions")
 
-    if not career_url:
-        search_url = "https://www.google.com/search?q=" + urllib.parse.quote(company + " jobs")
-        st.caption(f"No career page on file. [Search for jobs on Google]({search_url})")
-        return
-
-    ats, _ = detect_ats(career_url)
-    if ats in ("workday", "unknown"):
-        st.caption(
-            f"Auto-scraping not supported for this career page "
-            f"({'Workday' if ats == 'workday' else 'unknown ATS'}). "
-            f"[Browse jobs directly]({career_url})"
-        )
-        return
-
     jobs, cached_ats, scraped_at = get_cached_jobs(company)
-    stale = _is_stale(scraped_at)
 
     col_info, col_btn = st.columns([4, 1])
     with col_info:
         if jobs:
             st.caption(f"{len(jobs)} jobs via **{cached_ats}** · scraped {_format_age(scraped_at)}")
         else:
-            st.caption(f"No jobs fetched yet · **{ats}** detected")
+            st.caption("No jobs fetched yet")
     with col_btn:
         btn_label = "Refresh" if jobs else "Fetch Jobs"
         if st.button(btn_label, key=f"fetch_jobs_{key_suffix}", use_container_width=True):
-            with st.spinner("Fetching jobs..."):
-                new_jobs, new_ats = scrape_jobs(career_url)
-            upsert_job_listings(company, new_jobs, new_ats)
-            st.rerun()
+            with st.spinner("Detecting ATS and fetching jobs..."):
+                new_jobs, new_ats = scrape_jobs(career_url, company_name=company)
+            if new_ats in ("unknown", "workday") and not new_jobs:
+                fallback = career_url or (
+                    "https://www.google.com/search?q=" + urllib.parse.quote(company + " jobs")
+                )
+                st.warning(
+                    f"Could not auto-scrape ({'Workday — manual browsing required' if new_ats == 'workday' else 'ATS not detected'}). "
+                    f"[Browse directly]({fallback})"
+                )
+            else:
+                upsert_job_listings(company, new_jobs, new_ats)
+                st.rerun()
 
     if not jobs:
         return
