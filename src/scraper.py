@@ -56,8 +56,14 @@ def _index_lookup(slug: str) -> tuple[str, str] | None:
     """Check slug against loaded index. Returns (ats_name, slug) or None."""
     _load_slug_index()
     for ats in ("greenhouse", "lever", "ashby"):
-        if slug in _slug_sets.get(ats, set()):
+        slugs = _slug_sets.get(ats, set())
+        if slug in slugs:
             return ats, slug
+        # Prefix fallback: "doordash" → "doordashusa", "stripe" → "stripe-inc", etc.
+        if len(slug) >= 4:
+            for s in sorted(slugs):  # sorted for determinism
+                if s.startswith(slug):
+                    return ats, s
     if slug in _workday_map:
         return "workday", _workday_map[slug]
     return None
