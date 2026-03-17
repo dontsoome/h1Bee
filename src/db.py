@@ -163,6 +163,14 @@ def create_tables():
             UNIQUE(employer_name, job_url)
         )""",
         "CREATE INDEX IF NOT EXISTS idx_job_listings_employer ON job_listings(employer_name)",
+        """CREATE TABLE IF NOT EXISTS company_ats (
+            employer_name  TEXT PRIMARY KEY,
+            ats_platform   TEXT NOT NULL DEFAULT 'unknown',
+            ats_url        TEXT NOT NULL DEFAULT '',
+            auto_detected  BOOLEAN NOT NULL DEFAULT FALSE,
+            probed_at      TIMESTAMPTZ
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_company_ats_platform ON company_ats(ats_platform)",
     ]
     for stmt in stmts:
         conn.execute(stmt)
