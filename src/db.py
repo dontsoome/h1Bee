@@ -303,8 +303,20 @@ def upsert_job_listings(employer_name: str, jobs: list[dict], ats_platform: str)
     raw.close()
 
 
-def search_job_listings(keyword: str = "", company: str = "", limit: int = 500) -> pd.DataFrame:
-    """Search job_listings by keyword and/or company name."""
+def search_job_listings(
+    keyword: str = "",
+    company: str = "",
+    state_patterns: list[str] | None = None,
+    work_type: str = "All",
+    limit: int = 500,
+) -> pd.DataFrame:
+    """
+    Search job_listings with optional keyword, company, location, and work-type filters.
+
+    state_patterns: list of ILIKE substrings to OR together for location matching
+                    e.g. [", NY", "New York", ", NJ", "New Jersey"]
+    work_type: "All" | "Remote" | "Hybrid" | "On-site"
+    """
     clauses, params = [], []
     if keyword:
         clauses.append("(job_title ILIKE %s OR department ILIKE %s)")
@@ -312,6 +324,19 @@ def search_job_listings(keyword: str = "", company: str = "", limit: int = 500) 
     if company:
         clauses.append("employer_name ILIKE %s")
         params.append(f"%{company}%")
+    if state_patterns:
+        loc_sub = " OR ".join(["location ILIKE %s"] * len(state_patterns))
+        clauses.append(f"({loc_sub})")
+        params.extend([f"%{p}%" for p in state_patterns])
+    if work_type == "Remote":
+        clauses.append("location ILIKE %s")
+        params.append("%remote%")
+    elif work_type == "Hybrid":
+        clauses.append("location ILIKE %s")
+        params.append("%hybrid%")
+    elif work_type == "On-site":
+        clauses.append("location NOT ILIKE %s AND location NOT ILIKE %s")
+        params.extend(["%remote%", "%hybrid%"])
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     sql = f"""
         SELECT employer_name, job_title, location, department, job_url, ats_platform,

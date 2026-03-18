@@ -682,16 +682,58 @@ with tab_jobs:
         unsafe_allow_html=True,
     )
 
+    # ── State → ILIKE pattern mapping ─────────────────────────────────────────
+    STATE_PATTERNS = {
+        "NY": [", NY", "New York"],
+        "NJ": [", NJ", "New Jersey", "Jersey City"],
+        "CA": [", CA", "California", "San Francisco", "Los Angeles"],
+        "WA": [", WA", "Seattle"],
+        "TX": [", TX", "Texas"],
+        "MA": [", MA", "Boston"],
+        "IL": [", IL", "Chicago"],
+        "GA": [", GA", "Atlanta"],
+        "CO": [", CO", "Denver"],
+        "FL": [", FL", "Miami", "Florida"],
+        "VA": [", VA", "Virginia"],
+        "NC": [", NC", "Charlotte", "Raleigh"],
+        "PA": [", PA", "Philadelphia"],
+        "OH": [", OH", "Ohio"],
+        "AZ": [", AZ", "Phoenix"],
+    }
+
     # ── Search bar ────────────────────────────────────────────────────────────
-    jc1, jc2, jc3 = st.columns([4, 3, 1])
+    jc1, jc2 = st.columns([4, 3])
     with jc1:
         job_keyword = st.text_input("", placeholder="🔍  Search by job title (e.g. software engineer)",
                                     label_visibility="collapsed", key="job_keyword")
     with jc2:
         job_company = st.text_input("", placeholder="🏢  Filter by company name",
                                     label_visibility="collapsed", key="job_company_filter")
-    with jc3:
-        job_search_btn = st.button("Search", use_container_width=True, type="primary")
+
+    # ── Location + work type filters ──────────────────────────────────────────
+    fc1, fc2 = st.columns([3, 2])
+    with fc1:
+        selected_states = st.multiselect(
+            "State",
+            options=list(STATE_PATTERNS.keys()),
+            default=["NY", "NJ"],
+            label_visibility="collapsed",
+            placeholder="📍 Filter by state (default: NY/NJ)",
+            key="job_states",
+        )
+    with fc2:
+        work_type = st.radio(
+            "Work type",
+            ["All", "Remote", "Hybrid", "On-site"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="job_work_type",
+        )
+
+    # Build location patterns from selected states
+    state_patterns: list[str] = []
+    for s in selected_states:
+        state_patterns.extend(STATE_PATTERNS.get(s, [f", {s}"]))
 
     # ── Results ───────────────────────────────────────────────────────────────
     if cov["total_jobs"] == 0:
@@ -705,10 +747,18 @@ with tab_jobs:
         """, unsafe_allow_html=True)
     else:
         @st.cache_data(ttl=120, show_spinner="Searching...")
-        def _search_jobs(kw: str, co: str):
-            return search_job_listings(keyword=kw, company=co, limit=500)
+        def _search_jobs(kw: str, co: str, states: tuple, wtype: str):
+            return search_job_listings(
+                keyword=kw, company=co,
+                state_patterns=list(states) if states else None,
+                work_type=wtype,
+                limit=500,
+            )
 
-        jobs_df = _search_jobs(job_keyword.strip(), job_company.strip())
+        jobs_df = _search_jobs(
+            job_keyword.strip(), job_company.strip(),
+            tuple(state_patterns), work_type,
+        )
 
         if jobs_df.empty and not (job_keyword or job_company):
             st.markdown("""
@@ -732,7 +782,7 @@ with tab_jobs:
                 st.session_state.jobs_page = 1
             if "last_job_search" not in st.session_state:
                 st.session_state.last_job_search = ""
-            search_key = f"{job_keyword}|{job_company}"
+            search_key = f"{job_keyword}|{job_company}|{'_'.join(selected_states)}|{work_type}"
             if search_key != st.session_state.last_job_search:
                 st.session_state.jobs_page = 1
                 st.session_state.last_job_search = search_key
