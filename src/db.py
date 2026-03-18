@@ -303,6 +303,46 @@ def upsert_job_listings(employer_name: str, jobs: list[dict], ats_platform: str)
     raw.close()
 
 
+def search_job_listings(keyword: str = "", company: str = "", limit: int = 500) -> pd.DataFrame:
+    """Search job_listings by keyword and/or company name."""
+    clauses, params = [], []
+    if keyword:
+        clauses.append("(job_title ILIKE %s OR department ILIKE %s)")
+        params.extend([f"%{keyword}%", f"%{keyword}%"])
+    if company:
+        clauses.append("employer_name ILIKE %s")
+        params.append(f"%{company}%")
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    sql = f"""
+        SELECT employer_name, job_title, location, department, job_url, ats_platform,
+               scraped_at::text
+        FROM job_listings
+        {where}
+        ORDER BY employer_name, job_title
+        LIMIT %s
+    """
+    params.append(limit)
+    return query_df(sql, tuple(params))
+
+
+def get_job_coverage() -> dict:
+    """Return stats on how many companies have been scraped vs ATS-detected."""
+    conn = get_connection()
+    ats_detected      = conn.execute(
+        "SELECT COUNT(*) FROM company_ats WHERE ats_platform != 'unknown'"
+    ).fetchone()[0]
+    companies_scraped = conn.execute(
+        "SELECT COUNT(DISTINCT employer_name) FROM job_listings"
+    ).fetchone()[0]
+    total_jobs        = conn.execute("SELECT COUNT(*) FROM job_listings").fetchone()[0]
+    conn.close()
+    return {
+        "ats_detected":      ats_detected,
+        "companies_scraped": companies_scraped,
+        "total_jobs":        total_jobs,
+    }
+
+
 def get_all_filter_options() -> dict:
     """Fetch all sidebar filter options in a single DB connection."""
     conn = get_connection()

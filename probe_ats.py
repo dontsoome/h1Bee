@@ -47,20 +47,30 @@ def _slugify(name: str) -> list[str]:
     s = name.lower()
     s = _LEGAL.sub(" ", s)
     s = re.sub(r"[^\w\s]", " ", s)   # remove punctuation
-    words = s.split()
+    # Drop purely numeric tokens (e.g. "1 TO 1 THERAPIES" → keep only "to", "therapies")
+    words = [w for w in s.split() if not w.isdigit()]
     if not words:
         return []
 
     full_hyphen = "-".join(words)
     full_concat = "".join(words)
-    first       = words[0]
-    first_two   = "-".join(words[:2]) if len(words) >= 2 else None
+
+    candidates = [full_hyphen, full_concat]
+
+    # Only add first-word slug when the company is effectively single-word after stripping.
+    # Multi-word companies like "UNIVERSITY OF MICHIGAN" must not emit "university" alone —
+    # that slug belongs to an unrelated company on the ATS.
+    meaningful = [w for w in words if len(w) >= 4]
+    if len(meaningful) == 1:
+        candidates.append(meaningful[0])
 
     seen, out = set(), []
-    for candidate in filter(None, [full_hyphen, full_concat, first, first_two]):
-        if candidate not in seen:
-            seen.add(candidate)
-            out.append(candidate)
+    for candidate in candidates:
+        # Skip slugs that are too short or purely numeric — high false-positive risk
+        if len(candidate) >= 4 and not candidate.isdigit():
+            if candidate not in seen:
+                seen.add(candidate)
+                out.append(candidate)
     return out
 
 
@@ -71,12 +81,74 @@ def _has_jobs(response: requests.Response) -> bool:
     except Exception:
         return False
     # Greenhouse: {"jobs": [...], "meta": {...}}
-    # Lever:      [{"text": "Job Title", ...}, ...]
+    # Lever:      [{"text": "Job Title", ...}, ...]  — empty list = valid slug but no openings
     # Ashby:      {"jobPostings": [...]}
-    return (
-        (isinstance(data, dict) and ("jobs" in data or "jobPostings" in data))
-        or (isinstance(data, list) and len(data) >= 0)  # Lever returns [] for valid slug
-    )
+    if isinstance(data, dict):
+        return "jobs" in data or "jobPostings" in data
+    if isinstance(data, list):
+        return len(data) > 0  # require at least one posting to avoid false positives
+    return False
+
+
+def _greenhouse_name_matches(slug: str, employer_name: str) -> bool:
+    """
+    Verify a Greenhouse slug actually belongs to this employer.
+    GET /v1/boards/{slug} returns {"name": "Actual Company Name", ...}.
+    We do a loose token-overlap check to handle name variations.
+    """
+    try:
+        r = requests.get(
+            f"https://api.greenhouse.io/v1/boards/{slug}",
+            headers=HEADERS, timeout=TIMEOUT,
+        )
+        if r.status_code != 200:
+            return False
+        board_name = r.json().get("name", "").lower()
+    except Exception:
+        return False
+
+    # Strip legal suffixes and punctuation from both names for comparison
+    def _tokens(s: str) -> set[str]:
+        s = _LEGAL.sub(" ", s.lower())
+        s = re.sub(r"[^\w\s]", " ", s)
+        return {w for w in s.split() if len(w) >= 3 and not w.isdigit()}
+
+    employer_tokens = _tokens(employer_name)
+    board_tokens    = _tokens(board_name)
+    if not employer_tokens or not board_tokens:
+        return False
+
+    # At least 50% of the shorter name's tokens must appear in the other
+    overlap = employer_tokens & board_tokens
+    min_len = min(len(employer_tokens), len(board_tokens))
+    return len(overlap) / min_len >= 0.5
+
+
+def _ashby_name_matches(response: requests.Response, employer_name: str) -> bool:
+    """
+    Verify an Ashby board belongs to this employer.
+    Ashby returns {"organization": {"name": "Actual Company"}, "jobPostings": [...]}
+    """
+    try:
+        org_name = response.json().get("organization", {}).get("name", "")
+    except Exception:
+        return False
+    if not org_name:
+        return False
+
+    def _tokens(s: str) -> set[str]:
+        s = _LEGAL.sub(" ", s.lower())
+        s = re.sub(r"[^\w\s]", " ", s)
+        return {w for w in s.split() if len(w) >= 3 and not w.isdigit()}
+
+    employer_tokens = _tokens(employer_name)
+    board_tokens    = _tokens(org_name)
+    if not employer_tokens or not board_tokens:
+        return False
+
+    overlap = employer_tokens & board_tokens
+    min_len = min(len(employer_tokens), len(board_tokens))
+    return len(overlap) / min_len >= 0.5
 
 
 def probe_company(employer_name: str) -> dict:
@@ -88,6 +160,11 @@ def probe_company(employer_name: str) -> dict:
             try:
                 r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
                 if r.status_code == 200 and _has_jobs(r):
+                    # Verify the board actually belongs to this employer
+                    if ats == "greenhouse" and not _greenhouse_name_matches(slug, employer_name):
+                        continue
+                    if ats == "ashby" and not _ashby_name_matches(r, employer_name):
+                        continue
                     return {
                         "employer_name": employer_name,
                         "ats_platform":  ats,

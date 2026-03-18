@@ -16,6 +16,17 @@ conn.autocommit = True
 cur = conn.cursor()
 
 steps = [
+    ("Create company_ats table", """
+        CREATE TABLE IF NOT EXISTS company_ats (
+            employer_name  TEXT PRIMARY KEY,
+            ats_platform   TEXT NOT NULL DEFAULT 'unknown',
+            ats_url        TEXT NOT NULL DEFAULT '',
+            auto_detected  BOOLEAN NOT NULL DEFAULT FALSE,
+            probed_at      TIMESTAMPTZ
+        )
+    """),
+    ("Index on company_ats(ats_platform)",
+     "CREATE INDEX IF NOT EXISTS idx_company_ats_platform ON company_ats(ats_platform)"),
     ("Composite index: status+employer",
      "CREATE INDEX IF NOT EXISTS idx_status_employer ON lca_records(case_status, employer_name)"),
     ("Composite index: status+state+employer",

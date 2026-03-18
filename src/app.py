@@ -30,7 +30,8 @@ if "BRAVE_API_KEY" not in os.environ:
         pass  # Optional — Brave fallback just won't run without it
 
 from db import (get_connection, query_df, get_distinct_values, get_all_filter_options,
-                ensure_job_listings_table, get_cached_jobs, upsert_job_listings)
+                ensure_job_listings_table, get_cached_jobs, upsert_job_listings,
+                search_job_listings, get_job_coverage)
 from filters import build_where_clause
 from scraper import scrape_jobs
 
@@ -213,6 +214,18 @@ def add_to_tracker(company: str):
     )
     conn.commit()
     conn.close()
+
+def add_job_to_tracker(company: str, job_title: str, job_url: str):
+    now = datetime.now(timezone.utc).isoformat()
+    conn = get_connection()
+    conn.execute(
+        """INSERT INTO job_applications (company, job_title, job_urls, stage, notes, created_at, updated_at)
+           VALUES (%s, %s, %s, 'Interested', '', %s, %s)""",
+        (company, job_title, job_url, now, now),
+    )
+    conn.commit()
+    conn.close()
+
 
 def remove_from_tracker(company: str):
     conn = get_connection()
@@ -525,8 +538,118 @@ def show_company_table(source_df: pd.DataFrame, page_key: str, table_key: str,
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                        key=f"export_{table_key}")
 
+# ── Global custom styles ──────────────────────────────────────────────────────
+st.markdown("""
+<style>
+/* ── Job cards ── */
+.job-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 2px;
+    min-height: 130px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+}
+.job-company {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 75%;
+}
+.job-title {
+    font-size: 0.93rem;
+    font-weight: 700;
+    color: #0f172a;
+    margin: 5px 0 6px 0;
+    line-height: 1.35;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.job-meta { font-size: 0.78rem; color: #94a3b8; }
+.ats-pill {
+    font-size: 0.62rem;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 20px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+.ats-greenhouse { background: #dcfce7; color: #15803d; }
+.ats-lever      { background: #dbeafe; color: #1d4ed8; }
+.ats-ashby      { background: #fef9c3; color: #a16207; }
+
+/* ── Tracker kanban ── */
+.kanban-header {
+    font-size: 0.75rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 7px 12px;
+    border-radius: 8px;
+    text-align: center;
+    margin-bottom: 10px;
+}
+.stage-Interested   { background:#f1f5f9; color:#475569; }
+.stage-Applied      { background:#dbeafe; color:#1d4ed8; }
+.stage-Phone-Screen { background:#ede9fe; color:#6d28d9; }
+.stage-Interview    { background:#fef3c7; color:#b45309; }
+.stage-Offer        { background:#dcfce7; color:#15803d; }
+.stage-Rejected     { background:#fee2e2; color:#b91c1c; }
+
+.app-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin-bottom: 6px;
+}
+.app-card-company {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.app-card-title {
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: #0f172a;
+    margin: 3px 0 4px 0;
+    line-height: 1.3;
+}
+.app-card-notes { font-size: 0.78rem; color: #94a3b8; font-style: italic; }
+
+/* ── Coverage pill row ── */
+.cov-pill {
+    display: inline-block;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 20px;
+    padding: 4px 12px;
+    font-size: 0.78rem;
+    color: #475569;
+    margin-right: 8px;
+}
+.cov-pill b { color: #0f172a; }
+</style>
+""", unsafe_allow_html=True)
+
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_explorer, tab_tracker = st.tabs(["Explorer", "Job Tracker"])
+tab_explorer, tab_jobs, tab_tracker = st.tabs(["🔍 Explorer", "💼 Jobs", "📋 Tracker"])
 
 # ══════════════════════════════════════════════════════════════════════════════
 with tab_explorer:
@@ -541,42 +664,282 @@ with tab_explorer:
     )
 
 # ══════════════════════════════════════════════════════════════════════════════
-with tab_tracker:
-    st.subheader("Job Tracker")
-    tracker_df = load_tracker()
+with tab_jobs:
 
-    STAGES = ["Interested", "Applied", "Phone Screen", "Interview", "Offer", "Rejected"]
+    @st.cache_data(ttl=120)
+    def _job_coverage():
+        return get_job_coverage()
 
-    if tracker_df.empty:
-        st.info("No saved companies yet. Select a company and click '+ Save to Tracker'.")
+    cov = _job_coverage()
 
-    col_config = {
-        "id":        None,
-        "Company":   st.column_config.TextColumn("Company", width="medium"),
-        "Job Title": st.column_config.TextColumn("Job Title", width="medium"),
-        "Link":      st.column_config.TextColumn("Link", width="medium"),
-        "Status":    st.column_config.SelectboxColumn("Status", options=STAGES, width="small"),
-        "Notes":     st.column_config.TextColumn("Notes", width="large"),
-    }
-
-    st.data_editor(
-        tracker_df,
-        column_config=col_config,
-        column_order=["Company", "Job Title", "Link", "Status", "Notes"],
-        use_container_width=True,
-        hide_index=True,
-        num_rows="dynamic",
-        key="tracker_editor",
+    # ── Coverage pills ────────────────────────────────────────────────────────
+    st.markdown(
+        f'<div style="margin-bottom:16px">'
+        f'<span class="cov-pill"><b>{cov["total_jobs"]:,}</b> jobs indexed</span>'
+        f'<span class="cov-pill"><b>{cov["companies_scraped"]:,}</b> companies scraped</span>'
+        f'<span class="cov-pill"><b>{cov["ats_detected"]:,}</b> H-1B employers with ATS</span>'
+        f'</div>',
+        unsafe_allow_html=True,
     )
 
-    if st.button("Save Changes", type="primary", key="tracker_save"):
-        changes = st.session_state.get("tracker_editor", {})
-        if any(changes.get(k) for k in ("edited_rows", "added_rows", "deleted_rows")):
-            save_tracker_changes(changes, tracker_df)
-            st.success("Changes saved.")
-            st.rerun()
+    # ── Search bar ────────────────────────────────────────────────────────────
+    jc1, jc2, jc3 = st.columns([4, 3, 1])
+    with jc1:
+        job_keyword = st.text_input("", placeholder="🔍  Search by job title (e.g. software engineer)",
+                                    label_visibility="collapsed", key="job_keyword")
+    with jc2:
+        job_company = st.text_input("", placeholder="🏢  Filter by company name",
+                                    label_visibility="collapsed", key="job_company_filter")
+    with jc3:
+        job_search_btn = st.button("Search", use_container_width=True, type="primary")
+
+    # ── Results ───────────────────────────────────────────────────────────────
+    if cov["total_jobs"] == 0:
+        st.markdown("""
+        <div style="text-align:center; padding:60px 20px; color:#94a3b8;">
+            <div style="font-size:2.5rem; margin-bottom:12px">💼</div>
+            <div style="font-size:1.1rem; font-weight:600; color:#475569; margin-bottom:8px">No jobs scraped yet</div>
+            <div style="font-size:0.85rem">Run <code>python scrape_all.py</code> to populate job listings,<br>
+            or click <b>Fetch Jobs</b> on any company in the Explorer tab.</div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        @st.cache_data(ttl=120, show_spinner="Searching...")
+        def _search_jobs(kw: str, co: str):
+            return search_job_listings(keyword=kw, company=co, limit=500)
+
+        jobs_df = _search_jobs(job_keyword.strip(), job_company.strip())
+
+        if jobs_df.empty and not (job_keyword or job_company):
+            st.markdown("""
+            <div style="text-align:center; padding:40px 20px; color:#94a3b8;">
+                <div style="font-size:1.8rem; margin-bottom:8px">🔍</div>
+                <div style="font-size:0.95rem; color:#475569">Search above to find H-1B sponsored jobs</div>
+            </div>
+            """, unsafe_allow_html=True)
+        elif jobs_df.empty:
+            st.markdown("""
+            <div style="text-align:center; padding:40px 20px; color:#94a3b8;">
+                <div style="font-size:1.8rem; margin-bottom:8px">😕</div>
+                <div style="font-size:0.95rem; color:#475569">No jobs match your search</div>
+            </div>
+            """, unsafe_allow_html=True)
         else:
-            st.info("No changes to save.")
+            JOBS_PAGE_SIZE = 30
+            total_jobs_found = len(jobs_df)
+
+            if "jobs_page" not in st.session_state:
+                st.session_state.jobs_page = 1
+            if "last_job_search" not in st.session_state:
+                st.session_state.last_job_search = ""
+            search_key = f"{job_keyword}|{job_company}"
+            if search_key != st.session_state.last_job_search:
+                st.session_state.jobs_page = 1
+                st.session_state.last_job_search = search_key
+
+            total_job_pages = max(1, -(-total_jobs_found // JOBS_PAGE_SIZE))
+            st.session_state.jobs_page = max(1, min(st.session_state.jobs_page, total_job_pages))
+
+            offset = (st.session_state.jobs_page - 1) * JOBS_PAGE_SIZE
+            page_jobs = jobs_df.iloc[offset: offset + JOBS_PAGE_SIZE]
+
+            # Result count + pagination header
+            rc1, rc2 = st.columns([4, 2])
+            with rc1:
+                st.markdown(
+                    f'<p style="margin:0;padding-top:4px;font-size:0.85rem;color:#64748b;">'
+                    f'<b style="color:#0f172a">{total_jobs_found:,}</b> jobs found'
+                    f' · page {st.session_state.jobs_page} of {total_job_pages}</p>',
+                    unsafe_allow_html=True,
+                )
+            with rc2:
+                pg_c1, pg_c2, pg_c3 = st.columns(3)
+                with pg_c1:
+                    if st.button("←", key="jobs_prev", disabled=st.session_state.jobs_page <= 1,
+                                 use_container_width=True):
+                        st.session_state.jobs_page -= 1
+                        st.rerun()
+                with pg_c2:
+                    st.markdown(
+                        f'<p style="text-align:center;margin:0;padding-top:6px;font-size:0.85rem;">'
+                        f'{st.session_state.jobs_page}/{total_job_pages}</p>',
+                        unsafe_allow_html=True,
+                    )
+                with pg_c3:
+                    if st.button("→", key="jobs_next",
+                                 disabled=st.session_state.jobs_page >= total_job_pages,
+                                 use_container_width=True):
+                        st.session_state.jobs_page += 1
+                        st.rerun()
+
+            st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+            # ── Job cards grid (3 columns) ────────────────────────────────────
+            ATS_COLORS = {
+                "greenhouse": ("ats-greenhouse", "Greenhouse"),
+                "lever":      ("ats-lever",      "Lever"),
+                "ashby":      ("ats-ashby",       "Ashby"),
+            }
+
+            cols = st.columns(3)
+            for i, (_, job) in enumerate(page_jobs.iterrows()):
+                ats_key   = str(job.get("ats_platform", "")).lower()
+                pill_cls, pill_label = ATS_COLORS.get(ats_key, ("ats-pill", ats_key.title()))
+                location  = job.get("location", "") or ""
+                dept      = job.get("department", "") or ""
+                meta_parts = [p for p in [location, dept] if p]
+                meta      = " · ".join(meta_parts) if meta_parts else "Location not listed"
+
+                with cols[i % 3]:
+                    st.markdown(f"""
+                    <div class="job-card">
+                        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+                            <span class="job-company">{job['employer_name']}</span>
+                            <span class="ats-pill {pill_cls}">{pill_label}</span>
+                        </div>
+                        <div class="job-title">{job['job_title']}</div>
+                        <div class="job-meta">📍 {meta}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    btn_a, btn_s = st.columns(2)
+                    with btn_a:
+                        st.link_button("Apply →", job.get("job_url", "#"),
+                                       use_container_width=True)
+                    with btn_s:
+                        if st.button("+ Save", key=f"save_job_{offset+i}",
+                                     use_container_width=True):
+                            add_job_to_tracker(job["employer_name"], job["job_title"],
+                                               job.get("job_url", ""))
+                            get_tracked_companies.clear()
+                            st.toast(f"Saved: {job['job_title']}", icon="✅")
+
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_tracker:
+
+    STAGES = ["Interested", "Applied", "Phone Screen", "Interview", "Offer", "Rejected"]
+    STAGE_COLORS = {
+        "Interested":   ("#f1f5f9", "#475569"),
+        "Applied":      ("#dbeafe", "#1d4ed8"),
+        "Phone Screen": ("#ede9fe", "#6d28d9"),
+        "Interview":    ("#fef3c7", "#b45309"),
+        "Offer":        ("#dcfce7", "#15803d"),
+        "Rejected":     ("#fee2e2", "#b91c1c"),
+    }
+
+    tracker_df = load_tracker()
+
+    if tracker_df.empty:
+        st.markdown("""
+        <div style="text-align:center; padding:60px 20px;">
+            <div style="font-size:2.5rem; margin-bottom:12px">📋</div>
+            <div style="font-size:1.1rem; font-weight:600; color:#475569; margin-bottom:8px">
+                Your tracker is empty
+            </div>
+            <div style="font-size:0.85rem; color:#94a3b8">
+                Search for jobs in the <b>Jobs</b> tab and click <b>+ Save</b>,<br>
+                or click <b>+ Save to Tracker</b> on any company in the Explorer.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        # ── Summary bar ───────────────────────────────────────────────────────
+        counts = tracker_df["Status"].value_counts().to_dict()
+        pills_html = ""
+        for stage in STAGES:
+            n = counts.get(stage, 0)
+            if n == 0:
+                continue
+            bg, fg = STAGE_COLORS[stage]
+            pills_html += (
+                f'<span style="background:{bg};color:{fg};font-size:0.75rem;font-weight:700;'
+                f'padding:4px 12px;border-radius:20px;margin-right:8px;display:inline-block;margin-bottom:4px">'
+                f'{stage} <b>{n}</b></span>'
+            )
+        st.markdown(f'<div style="margin-bottom:20px">{pills_html}</div>', unsafe_allow_html=True)
+
+        # ── Active stage filter ────────────────────────────────────────────────
+        active_stages = [s for s in STAGES if s in counts]
+        selected_stage = st.radio(
+            "Filter by stage",
+            ["All"] + active_stages,
+            horizontal=True,
+            label_visibility="collapsed",
+            key="tracker_stage_filter",
+        )
+
+        view_df = tracker_df if selected_stage == "All" else tracker_df[tracker_df["Status"] == selected_stage]
+        st.markdown(f'<p style="font-size:0.82rem;color:#94a3b8;margin:8px 0 16px">{len(view_df)} application{"s" if len(view_df)!=1 else ""}</p>',
+                    unsafe_allow_html=True)
+
+        # ── Application cards ─────────────────────────────────────────────────
+        for _, row in view_df.iterrows():
+            row_id = row["id"]
+            stage  = row.get("Status", "Interested")
+            bg, fg = STAGE_COLORS.get(stage, ("#f1f5f9", "#475569"))
+            job_url = row.get("Link", "") or ""
+            notes   = row.get("Notes", "") or ""
+            job_title = row.get("Job Title", "") or ""
+
+            with st.container():
+                st.markdown(f"""
+                <div class="app-card">
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                        <div style="flex:1;min-width:0">
+                            <div class="app-card-company">{row['Company']}</div>
+                            <div class="app-card-title">{job_title or '(no job title)'}</div>
+                            {f'<div class="app-card-notes">{notes}</div>' if notes else ''}
+                        </div>
+                        <span style="background:{bg};color:{fg};font-size:0.68rem;font-weight:700;
+                                     padding:3px 10px;border-radius:20px;white-space:nowrap;
+                                     margin-left:10px;flex-shrink:0">{stage}</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                c1, c2, c3, c4 = st.columns([3, 2, 2, 1])
+
+                with c1:
+                    # Inline notes edit
+                    new_notes = st.text_input(
+                        "Notes", value=notes,
+                        placeholder="Add notes...",
+                        label_visibility="collapsed",
+                        key=f"notes_{row_id}",
+                    )
+                with c2:
+                    new_stage = st.selectbox(
+                        "Stage", STAGES,
+                        index=STAGES.index(stage) if stage in STAGES else 0,
+                        label_visibility="collapsed",
+                        key=f"stage_{row_id}",
+                    )
+                with c3:
+                    if job_url:
+                        st.link_button("View Job →", job_url, use_container_width=True)
+                with c4:
+                    if st.button("🗑", key=f"del_{row_id}", use_container_width=True,
+                                 help="Remove from tracker"):
+                        conn = get_connection()
+                        conn.execute("DELETE FROM job_applications WHERE id = %s", (row_id,))
+                        conn.commit()
+                        conn.close()
+                        get_tracked_companies.clear()
+                        st.rerun()
+
+                # Save if stage or notes changed
+                if new_stage != stage or new_notes != notes:
+                    now = datetime.now(timezone.utc).isoformat()
+                    conn = get_connection()
+                    conn.execute(
+                        "UPDATE job_applications SET stage=%s, notes=%s, updated_at=%s WHERE id=%s",
+                        (new_stage, new_notes, now, row_id),
+                    )
+                    conn.commit()
+                    conn.close()
+                    st.rerun()
+
+                st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
 
 # ── Attribution ───────────────────────────────────────────────────────────────
 st.divider()
