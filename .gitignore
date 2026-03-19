@@ -1,5 +1,27 @@
+# Environment
 .env
-h1b.db
+*.env
+
+# Python
 __pycache__/
 *.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Data
+h1b.db
 data/*.xlsx
+
+# Node
+node_modules/
+dist/
+.vite/
+
+# Claude memory
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
