@@ -1,0 +1,105 @@
+Loaded 36,866 slugs
+  greenhouse: 11,401
+  lever: 7,179
+  ashby: 4,645
+  workday: 2,570
+  smartrecruiters: 2,752
+  jazzhr: 3,123
+  icims: 5,196
+
+Loaded 65,020 H-1B employers
+
+Matching 65,020 employers...
+  High confidence (direct accept): 3,573
+  Medium confidence (needs verify): 19,858 pairs
+    Of which single-token ambiguous: 5,451
+
+Verifying 19,858 medium-confidence candidates via Claude Haiku...
+  Batch size: 500 | Workers: 1
+  Fetching board names for 19,858 candidates...
+  Got board names for 3,745/19,858
+  Batch 1/40 done  (500/19,858 pairs)  62/s
+  Batch 2/40 done  (1,000/19,858 pairs)  60/s
+  Batch 3/40 done  (1,500/19,858 pairs)  24/s
+  Batch 4/40 done  (2,000/19,858 pairs)  19/s
+  Rate limited — waiting 65s before retry 2/5...
+  Batch 5/40 done  (2,500/19,858 pairs)  11/s
+  Batch 6/40 done  (3,000/19,858 pairs)  12/s
+  Rate limited — waiting 65s before retry 2/5...
+  Batch 7/40 done  (3,500/19,858 pairs)  9/s
+  Batch 8/40 done  (4,000/19,858 pairs)  10/s
+  Batch 9/40 done  (4,500/19,858 pairs)  11/s
+  Batch 10/40 done  (5,000/19,858 pairs)  11/s
+  Batch 11/40 done  (5,500/19,858 pairs)  12/s
+  Batch 12/40 done  (6,000/19,858 pairs)  12/s
+  Batch 13/40 done  (6,500/19,858 pairs)  12/s
+  Batch 14/40 done  (7,000/19,858 pairs)  12/s
+  Batch 15/40 done  (7,500/19,858 pairs)  12/s
+  Rate limited — waiting 65s before retry 2/5...
+  Batch 16/40 done  (8,000/19,858 pairs)  10/s
+  Rate limited — waiting 65s before retry 2/5...
+  Batch 17/40 done  (8,500/19,858 pairs)  9/s
+  Rate limited — waiting 65s before retry 2/5...
+  Batch 18/40 done  (9,000/19,858 pairs)  8/s
+  Batch 19/40 done  (9,500/19,858 pairs)  8/s
+  Batch 20/40 done  (10,000/19,858 pairs)  8/s
+  Batch 21/40 done  (10,500/19,858 pairs)  9/s
+  Batch 22/40 done  (11,000/19,858 pairs)  9/s
+  Batch 23/40 done  (11,500/19,858 pairs)  9/s
+  Rate limited — waiting 65s before retry 2/5...
+  Batch 24/40 done  (12,000/19,858 pairs)  8/s
+  Batch 25/40 done  (12,500/19,858 pairs)  8/s
+  Batch 26/40 done  (13,000/19,858 pairs)  8/s
+  Rate limited — waiting 65s before retry 2/5...
+  Batch 27/40 done  (13,500/19,858 pairs)  8/s
+  Rate limited — waiting 65s before retry 2/5...
+  Batch 28/40 done  (14,000/19,858 pairs)  7/s
+  Batch 29/40 done  (14,500/19,858 pairs)  8/s
+  Batch 30/40 done  (15,000/19,858 pairs)  8/s
+  Batch 31/40 done  (15,500/19,858 pairs)  8/s
+  Batch 32/40 done  (16,000/19,858 pairs)  8/s
+  Rate limited — waiting 65s before retry 2/5...
+  Rate limited — waiting 130s before retry 3/5...
+  Batch 33/40 done  (16,500/19,858 pairs)  7/s
+  Rate limited — waiting 65s before retry 2/5...
+  Rate limited — waiting 130s before retry 3/5...
+  Batch 34/40 done  (17,000/19,858 pairs)  6/s
+  Batch 35/40 done  (17,500/19,858 pairs)  7/s
+  Batch 36/40 done  (18,000/19,858 pairs)  7/s
+  Batch 37/40 done  (18,500/19,858 pairs)  7/s
+  Batch 38/40 done  (19,000/19,858 pairs)  7/s
+  Batch 39/40 done  (19,500/19,858 pairs)  7/s
+  Batch 40/40 done  (19,858/19,858 pairs)  7/s
+  Claude said YES: 2,541/19,858
+  Confirmed (deduped by employer): 2,178
+
+====================================================================================================
+TOTAL MATCHED: 5,751
+  greenhouse      2,448
+  workday         810
+  lever           797
+  ashby           754
+  icims           539
+  jazzhr          221
+  smartrecruiters 182
+
+By tier:
+  HIGH       3,573
+  MEDIUM     2,178
+
+By verify method:
+  claude          2,178
+  heuristic       3,573
+
+Sample matches (top 40 by score):
+Employer                                      ATS          Slug                      Score   Tier     Method
+Traceback (most recent call last):
+  File "C:\Users\soo3\Desktop\h1b-explorer\h1b-explorer\match_ats.py", line 831, in <module>
+    main()
+  File "C:\Users\soo3\Desktop\h1b-explorer\h1b-explorer\match_ats.py", line 807, in main
+    print_summary(results)
+  File "C:\Users\soo3\Desktop\h1b-explorer\h1b-explorer\match_ats.py", line 762, in print_summary
+    print("-" * 110)
+  File "C:\Users\soo3\AppData\Local\Programs\Python\Python39\lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+UnicodeEncodeError: 'charmap' codec can't encode characters in position 0-109: character maps to <undefined>
