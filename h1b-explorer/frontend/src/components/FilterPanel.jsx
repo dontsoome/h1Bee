@@ -179,7 +179,7 @@ export default function FilterPanel({ filters, onFiltersChange, onSearch, filter
                   className="w-full mb-2 px-3 py-1.5 border border-gray-200 rounded-lg text-xs focus:outline-none focus:ring-2 focus:ring-purple-400"
                 />
                 <div className="flex flex-wrap gap-1.5 max-h-40 overflow-y-auto">
-                  {filteredStates.map((st) => {
+                  {['REMOTE', ...filteredStates].map((st) => {
                     const selected = filters.states.includes(st)
                     return (
                       <button

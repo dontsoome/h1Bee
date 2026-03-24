@@ -103,10 +103,16 @@ def get_jobs(
     # State filter
     state_list = _split_csv(states)
     if state_list:
-        normalized = [normalize_to_state_code(s) or s for s in state_list]
-        or_parts = " OR ".join(["location ILIKE %s" for _ in normalized])
-        clauses.append(f"({or_parts})")
-        params += [f"%, {code}%" for code in normalized]
+        or_parts = []
+        for s in state_list:
+            if s.upper() == "REMOTE":
+                or_parts.append("location ILIKE %s")
+                params.append("%remote%")
+            else:
+                code = normalize_to_state_code(s) or s
+                or_parts.append("location ILIKE %s")
+                params.append(f"%, {code}%")
+        clauses.append(f"({' OR '.join(or_parts)})")
 
     # City filter
     if city:
