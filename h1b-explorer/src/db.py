@@ -280,12 +280,14 @@ def upsert_job_listings(employer_name: str, jobs: list[dict], ats_platform: str)
     conn.close()
     if not jobs:
         return
-    rows = [
-        (employer_name, j["title"], j["url"],
-         j.get("department", ""), j.get("location", ""), ats_platform)
-        for j in jobs
-        if j.get("url")  # skip any jobs without a URL
-    ]
+    seen_urls: set[str] = set()
+    rows = []
+    for j in jobs:
+        url = j.get("url")
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            rows.append((employer_name, j["title"], url,
+                         j.get("department") or "", j.get("location") or "", ats_platform))
     if not rows:
         return
     raw = psycopg2.connect(_get_database_url())

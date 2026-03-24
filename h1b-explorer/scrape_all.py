@@ -1,11 +1,12 @@
 """
-Batch scrape job listings for all ATS-detected H-1B employers.
+Batch scrape job listings for all ATS-detected employers.
 
 Run from project root:
-    python scrape_all.py                  # scrape companies not scraped in last 24h
-    python scrape_all.py --limit 200      # cap at 200 companies
-    python scrape_all.py --all            # re-scrape everything
-    python scrape_all.py --workers 10     # parallelism (default 5)
+    python scrape_all.py                          # scrape companies not scraped in last 24h
+    python scrape_all.py --all                    # re-scrape everything
+    python scrape_all.py --platform greenhouse    # single platform only
+    python scrape_all.py --workers 25             # parallelism (default 10)
+    python scrape_all.py --limit 200              # cap at 200 companies
 """
 
 from __future__ import annotations
@@ -86,20 +87,24 @@ def _scrape_one(employer_name: str, platform: str, ats_url: str) -> tuple[str, l
 
 def main():
     parser = argparse.ArgumentParser(description="Batch scrape ATS job listings")
-    parser.add_argument("--limit",   type=int, default=0,     help="Max companies to scrape (0 = all)")
-    parser.add_argument("--workers", type=int, default=5,     help="Parallel scrape workers (default 5)")
-    parser.add_argument("--all",     action="store_true",     help="Re-scrape even recently scraped companies")
+    parser.add_argument("--limit",    type=int, default=0,     help="Max companies to scrape (0 = all)")
+    parser.add_argument("--workers",  type=int, default=10,    help="Parallel scrape workers (default 10)")
+    parser.add_argument("--all",      action="store_true",     help="Re-scrape even recently scraped companies")
+    parser.add_argument("--platform", type=str, default=None,  help="Scrape a single platform only (e.g. greenhouse)")
     args = parser.parse_args()
 
+    platform_filter = f"AND a.ats_platform = '{args.platform}'" if args.platform else ""
+
     if args.all:
-        sql = """
+        sql = f"""
             SELECT employer_name, ats_platform, ats_url
             FROM company_ats
             WHERE ats_platform NOT IN ('unknown')
+            {platform_filter.replace('a.ats_platform', 'ats_platform')}
             ORDER BY employer_name
         """
     else:
-        sql = """
+        sql = f"""
             SELECT a.employer_name, a.ats_platform, a.ats_url
             FROM company_ats a
             LEFT JOIN (
@@ -109,6 +114,7 @@ def main():
             ) j ON a.employer_name = j.employer_name
             WHERE a.ats_platform NOT IN ('unknown')
               AND (j.last_scraped IS NULL OR j.last_scraped < NOW() - INTERVAL '24 hours')
+              {platform_filter}
             ORDER BY a.employer_name
         """
 
@@ -121,7 +127,8 @@ def main():
         print("All companies scraped recently. Use --all to re-scrape.")
         return
 
-    print(f"Scraping {total:,} companies  |  workers={args.workers}")
+    platform_label = args.platform or "all platforms"
+    print(f"Scraping {total:,} companies  |  platform={platform_label}  |  workers={args.workers}")
     print("-" * 60)
 
     scraped, jobs_found = 0, 0

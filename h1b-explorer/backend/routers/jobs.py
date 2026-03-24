@@ -97,8 +97,8 @@ def get_jobs(
 
     # Full-text search across job_title and employer_name
     if search:
-        clauses.append("(job_title ILIKE %s OR employer_name ILIKE %s)")
-        params += [f"%{search}%", f"%{search}%"]
+        clauses.append("to_tsvector('english', job_title || ' ' || employer_name) @@ plainto_tsquery('english', %s)")
+        params.append(search)
 
     # State filter
     state_list = _split_csv(states)
@@ -140,10 +140,16 @@ def get_jobs(
     where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
     offset = (page - 1) * limit
 
-    # Count — fast, no JOIN needed (MV is pre-joined)
-    count_sql = f"SELECT COUNT(*) AS total_count FROM job_listings_enriched {where}"
-    count_row = query_one(count_sql, tuple(params))
-    total_count = count_row["total_count"] if count_row else 0
+    # Use approximate count when no filters (instant), exact count when filtered (smaller dataset)
+    if not clauses:
+        count_row = query_one(
+            "SELECT reltuples::bigint AS total_count FROM pg_class WHERE relname = 'job_listings_enriched'",
+            ()
+        )
+        total_count = count_row["total_count"] if count_row else 0
+    else:
+        count_row = query_one(f"SELECT COUNT(*) AS total_count FROM job_listings_enriched {where}", tuple(params))
+        total_count = count_row["total_count"] if count_row else 0
 
     data_sql = f"""
         SELECT
