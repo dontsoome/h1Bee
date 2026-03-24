@@ -87,95 +87,72 @@ def get_jobs(
     min_wage: Optional[float] = None,
     max_wage: Optional[float] = None,
     wage_level: Optional[str] = None,    # comma-separated e.g. "I,II"
+    h1b_only: bool = False,
     page: int = Query(default=1, ge=1),
     limit: int = Query(default=50, ge=1, le=100),
 ):
-    """Return paginated job_listings with LCA enrichment via JOIN."""
-    jl_clauses: list[str] = []
+    """Return paginated job_listings_enriched rows with optional filters."""
+    clauses: list[str] = []
     params: list = []
 
     # Full-text search across job_title and employer_name
     if search:
-        jl_clauses.append("(jl.job_title ILIKE %s OR jl.employer_name ILIKE %s)")
+        clauses.append("(job_title ILIKE %s OR employer_name ILIKE %s)")
         params += [f"%{search}%", f"%{search}%"]
 
-    # State filter — normalize to state codes and match ", CA" pattern
+    # State filter
     state_list = _split_csv(states)
     if state_list:
-        # Normalize each to a state code
         normalized = [normalize_to_state_code(s) or s for s in state_list]
-        or_parts = " OR ".join(["jl.location ILIKE %s" for _ in normalized])
-        jl_clauses.append(f"({or_parts})")
+        or_parts = " OR ".join(["location ILIKE %s" for _ in normalized])
+        clauses.append(f"({or_parts})")
         params += [f"%, {code}%" for code in normalized]
-    elif not city:
-        # Default: only US jobs — filter to locations with a recognizable US state pattern
-        jl_clauses.append(
-            "(jl.location ~ ', [A-Z]{2}( |$|[0-9])' OR jl.location ILIKE '%%remote%%' OR jl.location ILIKE '%%united states%%')"
-        )
 
     # City filter
     if city:
-        jl_clauses.append("jl.location ILIKE %s")
+        clauses.append("location ILIKE %s")
         params.append(f"%{city}%")
 
     # ATS platform filter
     platforms = _split_csv(ats_platform)
     if platforms:
         placeholders = ",".join(["%s"] * len(platforms))
-        jl_clauses.append(f"jl.ats_platform IN ({placeholders})")
+        clauses.append(f"ats_platform IN ({placeholders})")
         params += platforms
 
-    where = ("WHERE " + " AND ".join(jl_clauses)) if jl_clauses else ""
-    offset = (page - 1) * limit
-
-    # Salary filters — applied as WHERE on the materialized view columns
+    # Salary filters
     wage_levels = _split_csv(wage_level)
     if min_wage is not None:
-        jl_clauses.append("les.avg_wage_from >= %s")
+        clauses.append("avg_wage_from >= %s")
         params.append(min_wage)
     if max_wage is not None:
-        jl_clauses.append("les.avg_wage_to <= %s")
+        clauses.append("avg_wage_to <= %s")
         params.append(max_wage)
     if wage_levels:
         placeholders = ",".join(["%s"] * len(wage_levels))
-        jl_clauses.append(f"les.top_wage_level IN ({placeholders})")
+        clauses.append(f"top_wage_level IN ({placeholders})")
         params += wage_levels
 
-    # Rebuild where after adding salary clauses
-    where = ("WHERE " + " AND ".join(jl_clauses)) if jl_clauses else ""
-    having = ""  # no longer needed
+    # H-1B sponsors only
+    if h1b_only:
+        clauses.append("lca_count > 0")
 
-    # Count query
-    count_sql = f"""
-        SELECT COUNT(*) AS total_count
-        FROM job_listings jl
-        LEFT JOIN lca_employer_stats les ON LOWER(jl.employer_name) = les.employer_key
-        {where}
-    """
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    offset = (page - 1) * limit
+
+    # Count — fast, no JOIN needed (MV is pre-joined)
+    count_sql = f"SELECT COUNT(*) AS total_count FROM job_listings_enriched {where}"
     count_row = query_one(count_sql, tuple(params))
     total_count = count_row["total_count"] if count_row else 0
 
-    # Main query — join against pre-aggregated materialized view (fast)
     data_sql = f"""
         SELECT
-            jl.id,
-            jl.employer_name,
-            jl.job_title,
-            jl.job_url,
-            jl.department,
-            jl.location,
-            jl.ats_platform,
-            jl.scraped_at::text,
-            COALESCE(les.lca_count, 0)    AS lca_count,
-            les.avg_wage_from             AS avg_wage_from,
-            les.avg_wage_to               AS avg_wage_to,
-            les.top_wage_level            AS top_wage_level
-        FROM job_listings jl
-        LEFT JOIN lca_employer_stats les
-            ON LOWER(jl.employer_name) = les.employer_key
+            id, employer_name, job_title, job_url, department,
+            location, ats_platform, scraped_at::text,
+            lca_count, avg_wage_from, avg_wage_to, top_wage_level
+        FROM job_listings_enriched
         {where}
-        {having}
-        ORDER BY jl.scraped_at DESC NULLS LAST
+        ORDER BY scraped_at DESC NULLS LAST
         LIMIT %s OFFSET %s
     """
     data_params = tuple(params) + (limit, offset)

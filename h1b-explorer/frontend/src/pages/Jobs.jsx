@@ -6,6 +6,7 @@ import JobCard from '../components/JobCard.jsx'
 import Pagination from '../components/Pagination.jsx'
 
 const DEFAULT_FILTERS = {
+  h1bOnly: false,
   states: [],
   city: '',
   minWage: '',
@@ -17,6 +18,7 @@ const DEFAULT_FILTERS = {
 function buildApiParams(search, filters, page) {
   const params = { page, limit: 50 }
   if (search) params.search = search
+  if (filters.h1bOnly) params.h1b_only = true
   if (filters.states.length) params.states = filters.states.join(',')
   if (filters.city) params.city = filters.city
   if (filters.atsPlatforms.length) params.ats_platform = filters.atsPlatforms.join(',')

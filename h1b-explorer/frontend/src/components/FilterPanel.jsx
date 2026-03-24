@@ -34,6 +34,7 @@ const US_STATES = [
 ]
 
 const CATEGORIES = [
+  { id: 'h1b',      label: 'H-1B',     icon: '🛂' },
   { id: 'location', label: 'Location', icon: '📍' },
   { id: 'salary',   label: 'Salary',   icon: '💰' },
   { id: 'ats',      label: 'Platform', icon: '🖥' },
@@ -66,6 +67,7 @@ const WAGE_LEVEL_UNSELECTED = {
 
 function countActiveFilters(filters, categoryId) {
   switch (categoryId) {
+    case 'h1b':      return filters.h1bOnly ? 1 : 0
     case 'location': return (filters.states.length > 0 ? 1 : 0) + (filters.city ? 1 : 0)
     case 'salary':   return (filters.minWage ? 1 : 0) + (filters.maxWage ? 1 : 0) + filters.wageLevels.length
     case 'ats':      return filters.atsPlatforms.length
@@ -131,6 +133,38 @@ export default function FilterPanel({ filters, onFiltersChange, onSearch, filter
 
         {/* RIGHT: Content pane */}
         <div className="flex-1 overflow-y-auto p-4">
+
+          {/* H-1B PANE */}
+          {activeCategory === 'h1b' && (
+            <div className="space-y-4">
+              <p className="text-xs font-medium text-gray-400 uppercase tracking-wide">Sponsorship</p>
+              <button
+                type="button"
+                onClick={() => setField('h1bOnly', !filters.h1bOnly)}
+                className={`w-full flex items-center justify-between px-4 py-3 rounded-xl border-2 transition-all duration-150 text-left
+                  ${filters.h1bOnly
+                    ? 'border-purple-600 bg-purple-50 text-purple-700'
+                    : 'border-gray-200 bg-white text-gray-600 hover:border-purple-300'
+                  }`}
+              >
+                <div>
+                  <p className="font-semibold text-sm">H-1B Sponsors Only</p>
+                  <p className="text-xs text-gray-400 mt-0.5">Show only companies with verified LCA records</p>
+                </div>
+                <div className={`w-5 h-5 rounded-full border-2 flex items-center justify-center flex-shrink-0
+                  ${filters.h1bOnly ? 'border-purple-600 bg-purple-600' : 'border-gray-300'}`}>
+                  {filters.h1bOnly && (
+                    <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                    </svg>
+                  )}
+                </div>
+              </button>
+              <p className="text-xs text-gray-400">
+                Without this filter, all scraped job listings are shown — including companies that may not sponsor H-1B visas.
+              </p>
+            </div>
+          )}
 
           {/* LOCATION PANE */}
           {activeCategory === 'location' && (
@@ -266,6 +300,7 @@ export default function FilterPanel({ filters, onFiltersChange, onSearch, filter
           type="button"
           onClick={() =>
             onFiltersChange({
+              h1bOnly: false,
               states: [],
               city: '',
               minWage: '',
