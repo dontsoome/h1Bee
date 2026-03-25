@@ -170,7 +170,14 @@ export default function CompanyLogo({ employerName, size = 'md' }) {
         alt={employerName}
         className={`w-full h-full object-contain rounded-lg ${imgState === 'loaded' ? 'opacity-100' : 'opacity-0'}`}
         onLoad={() => setImgState('loaded')}
-        onError={() => setImgState('error')}
+        onError={(e) => {
+          // Fallback to Google favicon if Clearbit fails
+          if (!e.target.src.includes('google.com')) {
+            e.target.src = `https://www.google.com/s2/favicons?domain=${domain}&sz=128`
+          } else {
+            setImgState('error')
+          }
+        }}
       />
     </div>
   )

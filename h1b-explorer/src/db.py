@@ -287,18 +287,19 @@ def upsert_job_listings(employer_name: str, jobs: list[dict], ats_platform: str)
         if url and url not in seen_urls:
             seen_urls.add(url)
             rows.append((employer_name, j["title"], url,
-                         j.get("department") or "", j.get("location") or "", ats_platform))
+                         j.get("department") or "", j.get("location") or "",
+                         ats_platform, j.get("posted_at")))
     if not rows:
         return
     raw = psycopg2.connect(_get_database_url())
     cur = raw.cursor()
     psycopg2.extras.execute_values(
         cur,
-        """INSERT INTO job_listings (employer_name, job_title, job_url, department, location, ats_platform)
+        """INSERT INTO job_listings (employer_name, job_title, job_url, department, location, ats_platform, posted_at)
            VALUES %s
            ON CONFLICT (employer_name, job_url) DO UPDATE
            SET job_title=EXCLUDED.job_title, department=EXCLUDED.department,
-               location=EXCLUDED.location, scraped_at=NOW()""",
+               location=EXCLUDED.location, posted_at=EXCLUDED.posted_at, scraped_at=NOW()""",
         rows,
     )
     raw.commit()

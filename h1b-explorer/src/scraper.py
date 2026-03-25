@@ -12,6 +12,46 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; H1BEE/1.0)"}
 TIMEOUT = 6
 PROBE_TIMEOUT = 4
 
+# US state codes for location filtering
+_US_STATE_CODES = {
+    'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN',
+    'IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV',
+    'NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN',
+    'TX','UT','VT','VA','WA','WV','WI','WY','DC'
+}
+
+_US_STATE_NAMES = {
+    'ALABAMA','ALASKA','ARIZONA','ARKANSAS','CALIFORNIA','COLORADO','CONNECTICUT',
+    'DELAWARE','FLORIDA','GEORGIA','HAWAII','IDAHO','ILLINOIS','INDIANA','IOWA',
+    'KANSAS','KENTUCKY','LOUISIANA','MAINE','MARYLAND','MASSACHUSETTS','MICHIGAN',
+    'MINNESOTA','MISSISSIPPI','MISSOURI','MONTANA','NEBRASKA','NEVADA',
+    'NEW HAMPSHIRE','NEW JERSEY','NEW MEXICO','NEW YORK','NORTH CAROLINA',
+    'NORTH DAKOTA','OHIO','OKLAHOMA','OREGON','PENNSYLVANIA','RHODE ISLAND',
+    'SOUTH CAROLINA','SOUTH DAKOTA','TENNESSEE','TEXAS','UTAH','VERMONT',
+    'VIRGINIA','WASHINGTON','WEST VIRGINIA','WISCONSIN','WYOMING',
+    'DISTRICT OF COLUMBIA'
+}
+
+def _is_us_location(location: str) -> bool:
+    """Return True only if location is positively identified as US-based or remote."""
+    if not location:
+        return False
+    loc = location.upper().strip()
+    # Remote jobs — keep
+    if 'REMOTE' in loc:
+        return True
+    # Explicit US mentions
+    if any(x in loc for x in ('UNITED STATES', ' USA', 'USA ', 'U.S.A', 'U.S.')):
+        return True
+    # State code pattern: ", XX" or "- XX" or "(XX)"
+    m = re.search(r'[,\-\(]\s*([A-Z]{2})\b', loc)
+    if m and m.group(1) in _US_STATE_CODES:
+        return True
+    # Full state name anywhere in the string
+    if any(name in loc for name in _US_STATE_NAMES):
+        return True
+    return False
+
 _SLUG_INDEX_URLS = {
     "greenhouse": "https://raw.githubusercontent.com/Feashliaa/job-board-aggregator/main/data/greenhouse_companies.json",
     "lever":      "https://raw.githubusercontent.com/Feashliaa/job-board-aggregator/main/data/lever_companies.json",
@@ -295,8 +335,10 @@ def scrape_greenhouse(slug: str) -> list[dict]:
                 "url": j.get("absolute_url", ""),
                 "location": j.get("location", {}).get("name", ""),
                 "department": ", ".join(d.get("name", "") for d in j.get("departments", [])),
+                "posted_at": j.get("updated_at"),
             }
             for j in r.json().get("jobs", [])
+            if _is_us_location(j.get("location", {}).get("name", ""))
         ]
     except Exception:
         return []
@@ -309,15 +351,24 @@ def scrape_lever(slug: str) -> list[dict]:
             headers=HEADERS, timeout=TIMEOUT,
         )
         r.raise_for_status()
-        return [
-            {
+        jobs = []
+        for j in r.json():
+            location = j.get("categories", {}).get("location", "")
+            if not _is_us_location(location):
+                continue
+            created_ms = j.get("createdAt")
+            posted_at = None
+            if created_ms:
+                from datetime import datetime, timezone
+                posted_at = datetime.fromtimestamp(created_ms / 1000, tz=timezone.utc).isoformat()
+            jobs.append({
                 "title": j.get("text", ""),
                 "url": j.get("hostedUrl", ""),
-                "location": j.get("categories", {}).get("location", ""),
+                "location": location,
                 "department": j.get("categories", {}).get("department", ""),
-            }
-            for j in r.json()
-        ]
+                "posted_at": posted_at,
+            })
+        return jobs
     except Exception:
         return []
 
@@ -330,7 +381,6 @@ def scrape_ashby(slug: str) -> list[dict]:
         )
         r.raise_for_status()
         data = r.json()
-        # API returns "jobs" (newer) or "jobPostings" (older boards)
         job_list = data.get("jobs") or data.get("jobPostings") or []
         return [
             {
@@ -338,8 +388,10 @@ def scrape_ashby(slug: str) -> list[dict]:
                 "url": j.get("jobUrl", "") or j.get("applyUrl", ""),
                 "location": j.get("location", "") or j.get("locationName", ""),
                 "department": j.get("department", "") or j.get("departmentName", ""),
+                "posted_at": j.get("publishedAt"),
             }
             for j in job_list
+            if _is_us_location(j.get("location", "") or j.get("locationName", ""))
         ]
     except Exception:
         return []
@@ -369,11 +421,14 @@ def scrape_workday(slug: str, board: str) -> list[dict]:
                 if not postings:
                     break
                 for p in postings:
+                    location = p.get("locationsText", "")
+                    if not _is_us_location(location):
+                        continue
                     ext_path = p.get("externalPath", "")
                     jobs.append({
                         "title": p.get("title", ""),
                         "url": f"{base}/en-US/{board}/job{ext_path}" if ext_path else f"{base}/en-US/{board}",
-                        "location": p.get("locationsText", ""),
+                        "location": location,
                         "department": "",
                     })
                 if len(postings) < 20:
@@ -408,6 +463,8 @@ def scrape_smartrecruiters(slug: str) -> list[dict]:
                 loc = p.get("location") or {}
                 city = loc.get("city", "")
                 country = loc.get("country", "")
+                if country and country != "US":
+                    continue
                 location = ", ".join(filter(None, [city, country]))
                 dept = (p.get("department") or {}).get("label", "")
                 jobs.append({
@@ -415,6 +472,7 @@ def scrape_smartrecruiters(slug: str) -> list[dict]:
                     "url": f"https://jobs.smartrecruiters.com/{slug}/{p.get('id', '')}",
                     "location": location,
                     "department": dept,
+                    "posted_at": p.get("releasedDate"),
                 })
             if len(postings) < 100:
                 break

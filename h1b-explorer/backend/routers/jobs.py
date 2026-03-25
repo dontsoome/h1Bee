@@ -161,7 +161,7 @@ def get_jobs(
         SELECT
             id, employer_name, job_title, job_url, department,
             location, ats_platform, scraped_at::text,
-            lca_count, avg_wage_from, avg_wage_to, top_wage_level
+            posted_at::text, lca_count, avg_wage_from, avg_wage_to, top_wage_level
         FROM job_listings_enriched
         {where}
         ORDER BY scraped_at DESC NULLS LAST
