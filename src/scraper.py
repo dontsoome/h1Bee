@@ -12,6 +12,174 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; H1BEE/1.0)"}
 TIMEOUT = 6
 PROBE_TIMEOUT = 4
 
+# ── Salary extraction ─────────────────────────────────────────────────────────
+
+_SALARY_RANGE_PAT = re.compile(
+    r'\$\s*(\d[\d,]*\.?\d*)\s*([kK])?\s*(?:[-–—]|to|through)\s*\$\s*(\d[\d,]*\.?\d*)\s*([kK])?',
+    re.IGNORECASE,
+)
+
+def _parse_dollar(val: str, has_k: bool) -> float:
+    n = float(val.replace(',', ''))
+    return n * 1000 if has_k else n
+
+def _extract_salary(text: str | None) -> tuple[int | None, int | None]:
+    """Extract (salary_min, salary_max) from free text. Returns (None, None) if not found."""
+    if not text:
+        return None, None
+    for m in _SALARY_RANGE_PAT.finditer(text):
+        lo_str, lo_k, hi_str, hi_k = m.groups()
+        lo = _parse_dollar(lo_str, bool(lo_k))
+        hi = _parse_dollar(hi_str, bool(hi_k))
+        if 30_000 <= lo <= 1_000_000 and 30_000 <= hi <= 1_000_000 and lo <= hi:
+            return int(lo), int(hi)
+    return None, None
+
+
+def _normalize_employment_type(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    r = raw.lower().strip()
+    if 'full' in r:       return 'Full-time'
+    if 'part' in r:       return 'Part-time'
+    if 'intern' in r:     return 'Internship'
+    if 'contract' in r:   return 'Contract'
+    if 'temp' in r:       return 'Temporary'
+    return raw
+
+# US state codes for location filtering
+_US_STATE_CODES = {
+    'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN',
+    'IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV',
+    'NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN',
+    'TX','UT','VT','VA','WA','WV','WI','WY','DC'
+}
+
+_US_STATE_NAMES = {
+    'ALABAMA','ALASKA','ARIZONA','ARKANSAS','CALIFORNIA','COLORADO','CONNECTICUT',
+    'DELAWARE','FLORIDA','GEORGIA','HAWAII','IDAHO','ILLINOIS','INDIANA','IOWA',
+    'KANSAS','KENTUCKY','LOUISIANA','MAINE','MARYLAND','MASSACHUSETTS','MICHIGAN',
+    'MINNESOTA','MISSISSIPPI','MISSOURI','MONTANA','NEBRASKA','NEVADA',
+    'NEW HAMPSHIRE','NEW JERSEY','NEW MEXICO','NEW YORK','NORTH CAROLINA',
+    'NORTH DAKOTA','OHIO','OKLAHOMA','OREGON','PENNSYLVANIA','RHODE ISLAND',
+    'SOUTH CAROLINA','SOUTH DAKOTA','TENNESSEE','TEXAS','UTAH','VERMONT',
+    'VIRGINIA','WASHINGTON','WEST VIRGINIA','WISCONSIN','WYOMING',
+    'DISTRICT OF COLUMBIA'
+}
+
+_US_CITIES = {
+    # California
+    'SAN FRANCISCO','LOS ANGELES','SAN JOSE','SAN DIEGO','SACRAMENTO','OAKLAND',
+    'BERKELEY','PALO ALTO','MENLO PARK','MOUNTAIN VIEW','SUNNYVALE','SANTA CLARA',
+    'CUPERTINO','REDWOOD CITY','SAN MATEO','FREMONT','IRVINE','SANTA MONICA',
+    'BURBANK','PASADENA','LONG BEACH','ANAHEIM','RIVERSIDE','FRESNO','STOCKTON',
+    'MODESTO','BAKERSFIELD','SAN RAMON','PLEASANTON','WALNUT CREEK','CONCORD',
+    'ROSEVILLE','THOUSAND OAKS','OXNARD','SANTA BARBARA','SAN LUIS OBISPO',
+    'SILICON VALLEY','BAY AREA','SAN FRANCISCO BAY AREA',
+    # New York
+    'NEW YORK CITY','NYC','BROOKLYN','MANHATTAN','QUEENS','THE BRONX','YONKERS',
+    'BUFFALO','ROCHESTER','ALBANY','SYRACUSE',
+    # Texas
+    'HOUSTON','DALLAS','AUSTIN','SAN ANTONIO','FORT WORTH','PLANO','IRVING',
+    'ARLINGTON','GARLAND','FRISCO','MCKINNEY','DENTON','EL PASO','LUBBOCK',
+    'AMARILLO','CORPUS CHRISTI','WACO','MIDLAND','ODESSA',
+    # Washington
+    'SEATTLE','BELLEVUE','KIRKLAND','REDMOND','SPOKANE','TACOMA',
+    # Illinois
+    'CHICAGO','AURORA','NAPERVILLE','EVANSTON',
+    # Massachusetts
+    'BOSTON','CAMBRIDGE','WORCESTER','LOWELL','SPRINGFIELD','QUINCY',
+    # Georgia
+    'ATLANTA','SAVANNAH','COLUMBUS','AUGUSTA','SANDY SPRINGS',
+    # Florida
+    'MIAMI','ORLANDO','TAMPA','JACKSONVILLE','ST PETERSBURG','FORT LAUDERDALE',
+    'TALLAHASSEE','BOCA RATON','FORT MYERS','WEST PALM BEACH','GAINESVILLE',
+    # Colorado
+    'DENVER','BOULDER','COLORADO SPRINGS','AURORA','FORT COLLINS',
+    # North Carolina
+    'CHARLOTTE','RALEIGH','DURHAM','GREENSBORO','WINSTON-SALEM','RESEARCH TRIANGLE',
+    # Virginia
+    'RICHMOND','VIRGINIA BEACH','NORFOLK','ARLINGTON','ALEXANDRIA','MCLEAN','RESTON','TYSONS',
+    # Maryland / DC area
+    'BALTIMORE','BETHESDA','ROCKVILLE','SILVER SPRING','ANNAPOLIS',
+    # Ohio
+    'COLUMBUS','CLEVELAND','CINCINNATI','TOLEDO','AKRON','DAYTON',
+    # Michigan
+    'DETROIT','ANN ARBOR','GRAND RAPIDS','LANSING','DEARBORN',
+    # Pennsylvania
+    'PHILADELPHIA','PITTSBURGH','ALLENTOWN','HARRISBURG','ERIE',
+    # Arizona
+    'PHOENIX','SCOTTSDALE','TEMPE','CHANDLER','GILBERT','MESA','TUCSON',
+    # Tennessee
+    'NASHVILLE','MEMPHIS','KNOXVILLE','CHATTANOOGA',
+    # Minnesota
+    'MINNEAPOLIS','ST PAUL','BLOOMINGTON',
+    # Missouri
+    'ST LOUIS','SAINT LOUIS','KANSAS CITY',
+    # Oregon
+    'PORTLAND','EUGENE','SALEM',
+    # Nevada
+    'LAS VEGAS','RENO','HENDERSON',
+    # Wisconsin
+    'MILWAUKEE','MADISON',
+    # New Jersey
+    'NEWARK','JERSEY CITY','HOBOKEN','PRINCETON','MORRISTOWN',
+    # Connecticut
+    'STAMFORD','HARTFORD','NEW HAVEN','BRIDGEPORT',
+    # Indiana
+    'INDIANAPOLIS','FORT WAYNE','BLOOMINGTON',
+    # Kentucky
+    'LOUISVILLE','LEXINGTON',
+    # Louisiana
+    'NEW ORLEANS','BATON ROUGE',
+    # Alabama
+    'BIRMINGHAM','HUNTSVILLE','MONTGOMERY','MOBILE',
+    # Other major cities
+    'HONOLULU','SALT LAKE CITY','ALBUQUERQUE','OMAHA','TULSA','OKLAHOMA CITY',
+    'WICHITA','LITTLE ROCK','PROVIDENCE','HARTFORD','RICHMOND','CHARLOTTE',
+    'ROCHESTER','BUFFALO','PITTSBURGH','CINCINNATI','CLEVELAND',
+    'WASHINGTON DC','WASHINGTON D.C.',
+}
+
+def _is_us_location(location: str) -> bool:
+    """Return True only if location is positively identified as US-based or remote."""
+    if not location:
+        return False
+    loc = location.upper().strip()
+    # Remote only if no non-US country context (e.g. "Remote - India" should fail)
+    if 'REMOTE' in loc:
+        # If it also contains a state code or US keyword, it's US remote
+        if any(x in loc for x in ('UNITED STATES', ' USA', 'USA ', 'U.S.')):
+            return True
+        m = re.search(r'[,\-\(]\s*([A-Z]{2})\b', loc)
+        if m and m.group(1) in _US_STATE_CODES:
+            return True
+        if any(name in loc for name in _US_STATE_NAMES):
+            return True
+        # Bare "Remote" with no location context — keep it
+        stripped = re.sub(r'remote', '', loc, flags=re.IGNORECASE).strip(' -,/')
+        if not stripped:
+            return True
+        # "Remote" combined with something unrecognized — fall through to check below
+
+    # Explicit US mentions
+    if any(x in loc for x in ('UNITED STATES', ' USA', 'USA ', 'U.S.A', 'U.S.')):
+        return True
+    # State code pattern: ", XX" or "- XX" or "(XX)"
+    m = re.search(r'[,\-\(]\s*([A-Z]{2})\b', loc)
+    if m and m.group(1) in _US_STATE_CODES:
+        return True
+    # Full state name anywhere in the string
+    if any(name in loc for name in _US_STATE_NAMES):
+        return True
+    # Major US city anywhere in the string
+    words = re.split(r'[;,\-/|]', loc)
+    for part in words:
+        part = part.strip()
+        if part in _US_CITIES:
+            return True
+    return False
+
 _SLUG_INDEX_URLS = {
     "greenhouse": "https://raw.githubusercontent.com/Feashliaa/job-board-aggregator/main/data/greenhouse_companies.json",
     "lever":      "https://raw.githubusercontent.com/Feashliaa/job-board-aggregator/main/data/lever_companies.json",
@@ -282,65 +450,287 @@ def _ats_canonical_url(ats_name: str, slug: str) -> str:
 
 # ── Scrapers ──────────────────────────────────────────────────────────────────
 
-def scrape_greenhouse(slug: str) -> list[dict]:
+def scrape_greenhouse(slug: str) -> list[dict] | None:
     try:
         r = requests.get(
             f"https://boards-api.greenhouse.io/v1/boards/{slug}/jobs",
             headers=HEADERS, timeout=TIMEOUT,
         )
+        if r.status_code in (404, 410):
+            return None  # dead slug
         r.raise_for_status()
-        return [
-            {
+        jobs = []
+        for j in r.json().get("jobs", []):
+            location = j.get("location", {}).get("name", "")
+            if not _is_us_location(location):
+                continue
+            jobs.append({
                 "title": j.get("title", ""),
                 "url": j.get("absolute_url", ""),
-                "location": j.get("location", {}).get("name", ""),
+                "location": location,
                 "department": ", ".join(d.get("name", "") for d in j.get("departments", [])),
-            }
-            for j in r.json().get("jobs", [])
-        ]
+                "posted_at": j.get("updated_at"),
+                "is_remote": "remote" in location.lower() if location else None,
+                "employment_type": None,
+                "salary_min": None,
+                "salary_max": None,
+                "description": None,
+            })
+        return jobs
     except Exception:
         return []
 
 
-def scrape_lever(slug: str) -> list[dict]:
+def scrape_lever(slug: str) -> list[dict] | None:
     try:
         r = requests.get(
             f"https://api.lever.co/v0/postings/{slug}?mode=json",
             headers=HEADERS, timeout=TIMEOUT,
         )
+        if r.status_code in (404, 410):
+            return None
         r.raise_for_status()
-        return [
-            {
+        jobs = []
+        for j in r.json():
+            location = j.get("categories", {}).get("location", "")
+            if not _is_us_location(location):
+                continue
+            created_ms = j.get("createdAt")
+            posted_at = None
+            if created_ms:
+                from datetime import datetime, timezone
+                posted_at = datetime.fromtimestamp(created_ms / 1000, tz=timezone.utc).isoformat()
+            workplace = (j.get("workplaceType") or "").lower()
+            is_remote = workplace == "remote" or "remote" in location.lower()
+            description = (j.get("descriptionPlain") or "")[:5000] or None
+            salary_min, salary_max = _extract_salary(description)
+            jobs.append({
                 "title": j.get("text", ""),
                 "url": j.get("hostedUrl", ""),
-                "location": j.get("categories", {}).get("location", ""),
+                "location": location,
                 "department": j.get("categories", {}).get("department", ""),
-            }
-            for j in r.json()
-        ]
+                "posted_at": posted_at,
+                "is_remote": is_remote,
+                "employment_type": _normalize_employment_type(j.get("categories", {}).get("commitment")),
+                "salary_min": salary_min,
+                "salary_max": salary_max,
+                "description": description,
+            })
+        return jobs
     except Exception:
         return []
 
 
-def scrape_ashby(slug: str) -> list[dict]:
+def scrape_ashby(slug: str) -> list[dict] | None:
     try:
         r = requests.get(
             f"https://api.ashbyhq.com/posting-api/job-board/{slug}",
             headers=HEADERS, timeout=TIMEOUT,
         )
+        if r.status_code in (404, 410):
+            return None
         r.raise_for_status()
         data = r.json()
-        # API returns "jobs" (newer) or "jobPostings" (older boards)
         job_list = data.get("jobs") or data.get("jobPostings") or []
-        return [
-            {
+        jobs = []
+        for j in job_list:
+            # Prefer locationName (full display string e.g. "Remote; New York, NY; DC")
+            # over location (sometimes just "Remote")
+            location = j.get("locationName", "") or j.get("location", "")
+            # Also check for secondary locations array
+            secondary = j.get("secondaryLocations") or j.get("locations") or []
+            if secondary and isinstance(secondary, list):
+                extra = []
+                for loc in secondary:
+                    name = loc.get("locationName", "") or loc.get("name", "") if isinstance(loc, dict) else str(loc)
+                    if name and name not in location:
+                        extra.append(name)
+                if extra:
+                    location = location + "; " + "; ".join(extra) if location else "; ".join(extra)
+            if not _is_us_location(location):
+                continue
+            description = (j.get("descriptionPlain") or j.get("descriptionHtml") or "")[:5000] or None
+            salary_min, salary_max = _extract_salary(description)
+            # Ashby compensation tier summary (structured salary)
+            comp = j.get("compensationTierSummary") or j.get("compensation") or ""
+            if not salary_min and comp:
+                salary_min, salary_max = _extract_salary(str(comp))
+            jobs.append({
                 "title": j.get("title", ""),
                 "url": j.get("jobUrl", "") or j.get("applyUrl", ""),
-                "location": j.get("location", "") or j.get("locationName", ""),
+                "location": location,
                 "department": j.get("department", "") or j.get("departmentName", ""),
-            }
-            for j in job_list
-        ]
+                "posted_at": j.get("publishedAt"),
+                "is_remote": j.get("isRemote") or "remote" in location.lower(),
+                "employment_type": _normalize_employment_type(j.get("employmentType")),
+                "salary_min": salary_min,
+                "salary_max": salary_max,
+                "description": description,
+            })
+        return jobs
+    except Exception:
+        return []
+
+
+def scrape_workday(slug: str, board: str) -> list[dict]:
+    """Scrape Workday via internal REST API. Tries wd1/wd3/wd5 in order."""
+    if not board:
+        return []
+    for wdN in ("wd1", "wd3", "wd5", "wd12"):
+        base = f"https://{slug}.{wdN}.myworkdayjobs.com"
+        api_url = f"{base}/wday/cxs/{slug}/{board}/jobs"
+        try:
+            jobs = []
+            offset = 0
+            while offset < 500:
+                r = requests.post(
+                    api_url,
+                    json={"appliedFacets": {}, "limit": 20, "offset": offset, "searchText": ""},
+                    headers={**HEADERS, "Content-Type": "application/json"},
+                    timeout=TIMEOUT,
+                )
+                if r.status_code != 200:
+                    break
+                data = r.json()
+                postings = data.get("jobPostings", [])
+                if not postings:
+                    break
+                for p in postings:
+                    location = p.get("locationsText", "")
+                    if not _is_us_location(location):
+                        continue
+                    ext_path = p.get("externalPath", "")
+                    jobs.append({
+                        "title": p.get("title", ""),
+                        "url": f"{base}/en-US/{board}{ext_path}" if ext_path else f"{base}/en-US/{board}",
+                        "location": location,
+                        "department": "",
+                    })
+                if len(postings) < 20:
+                    break
+                offset += 20
+            if jobs:
+                return jobs
+        except Exception:
+            continue
+    return []
+
+
+def scrape_smartrecruiters(slug: str) -> list[dict]:
+    """Scrape SmartRecruiters via public API."""
+    try:
+        jobs = []
+        offset = 0
+        while offset < 500:
+            r = requests.get(
+                f"https://api.smartrecruiters.com/v1/companies/{slug}/postings",
+                params={"limit": 100, "offset": offset},
+                headers=HEADERS,
+                timeout=TIMEOUT,
+            )
+            if r.status_code != 200:
+                break
+            data = r.json()
+            postings = data.get("content", [])
+            if not postings:
+                break
+            for p in postings:
+                loc = p.get("location") or {}
+                city = loc.get("city", "")
+                region = loc.get("region", "")   # state name e.g. "Michigan"
+                country = loc.get("country", "")
+                if country and country.upper() != "US":
+                    continue
+                location = ", ".join(filter(None, [city, region]))
+                dept = (p.get("department") or {}).get("label", "")
+                is_remote = bool(loc.get("remote")) or "remote" in location.lower()
+                emp_type = (p.get("typeOfEmployment") or {}).get("typeId") or (p.get("typeOfEmployment") or {}).get("label")
+                jobs.append({
+                    "title": p.get("name", ""),
+                    "url": f"https://jobs.smartrecruiters.com/{slug}/{p.get('id', '')}",
+                    "location": location,
+                    "department": dept,
+                    "posted_at": p.get("releasedDate"),
+                    "is_remote": is_remote,
+                    "employment_type": _normalize_employment_type(emp_type),
+                    "salary_min": None,
+                    "salary_max": None,
+                    "description": None,
+                })
+            if len(postings) < 100:
+                break
+            offset += 100
+        return jobs
+    except Exception:
+        return []
+
+
+def scrape_jazzhr(slug: str) -> list[dict]:
+    """Scrape JazzHR job board via HTML parsing."""
+    try:
+        r = requests.get(
+            f"https://{slug}.applytojob.com/apply",
+            headers=HEADERS,
+            timeout=TIMEOUT,
+        )
+        if r.status_code != 200:
+            return []
+        # Extract job title + link from anchor tags near /apply/{id}/{title-slug}
+        matches = re.findall(
+            r'<a[^>]+href="(/apply/([A-Za-z0-9]+)/([A-Za-z0-9_-]+))"[^>]*>\s*([^<\n]{3,150})\s*</a>',
+            r.text,
+        )
+        seen: set[str] = set()
+        jobs = []
+        for href, job_id, _title_slug, title in matches:
+            title = title.strip()
+            if not title or href in seen:
+                continue
+            seen.add(href)
+            jobs.append({
+                "title": title,
+                "url": f"https://{slug}.applytojob.com{href}",
+                "location": "",
+                "department": "",
+            })
+        return jobs
+    except Exception:
+        return []
+
+
+def scrape_icims(url_slug: str) -> list[dict]:
+    """
+    Scrape iCIMS job board via HTML parsing.
+    url_slug is the full subdomain e.g. 'careers-amazon'.
+    """
+    try:
+        r = requests.get(
+            f"https://{url_slug}.icims.com/jobs/search",
+            params={"ss": 1, "searchCategory": 0, "in_iframe": 1},
+            headers=HEADERS,
+            timeout=TIMEOUT,
+        )
+        if r.status_code != 200:
+            return []
+        # Extract job title + link from /jobs/{id}/{title}/job pattern
+        matches = re.findall(
+            r'<a[^>]+href="(/jobs/(\d+)/([^/"]+)/job)"[^>]*>\s*([^<\n]{3,150})\s*</a>',
+            r.text,
+        )
+        seen: set[str] = set()
+        jobs = []
+        for href, _job_id, _title_slug, title in matches:
+            title = title.strip()
+            if not title or href in seen:
+                continue
+            seen.add(href)
+            jobs.append({
+                "title": title,
+                "url": f"https://{url_slug}.icims.com{href}",
+                "location": "",
+                "department": "",
+            })
+        return jobs
     except Exception:
         return []
 

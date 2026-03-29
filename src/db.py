@@ -160,7 +160,7 @@ def create_tables():
             location TEXT NOT NULL DEFAULT '',
             ats_platform TEXT NOT NULL DEFAULT '',
             scraped_at TIMESTAMPTZ DEFAULT NOW(),
-            UNIQUE(employer_name, job_url)
+            UNIQUE(job_url)
         )""",
         "CREATE INDEX IF NOT EXISTS idx_job_listings_employer ON job_listings(employer_name)",
         """CREATE TABLE IF NOT EXISTS company_ats (
@@ -273,34 +273,54 @@ def get_cached_jobs(employer_name: str) -> tuple[list[dict], str, str]:
 
 
 def upsert_job_listings(employer_name: str, jobs: list[dict], ats_platform: str):
-    """Replace all job listings for a company with freshly scraped data."""
-    conn = get_connection()
-    conn.execute("DELETE FROM job_listings WHERE employer_name = %s", (employer_name,))
-    conn.commit()
-    conn.close()
+    """Upsert job listings for a company. Only deletes old listings if new ones were scraped."""
     if not jobs:
         return
-    rows = [
-        (employer_name, j["title"], j["url"],
-         j.get("department", ""), j.get("location", ""), ats_platform)
-        for j in jobs
-        if j.get("url")  # skip any jobs without a URL
-    ]
+    seen_urls: set[str] = set()
+    rows = []
+    for j in jobs:
+        url = j.get("url")
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            rows.append((
+                employer_name, j["title"], url,
+                j.get("department") or "", j.get("location") or "",
+                ats_platform, j.get("posted_at"),
+                j.get("is_remote"), j.get("employment_type"),
+                j.get("salary_min"), j.get("salary_max"),
+                (j.get("description") or "")[:5000] or None,
+            ))
     if not rows:
         return
     raw = psycopg2.connect(_get_database_url())
     cur = raw.cursor()
     psycopg2.extras.execute_values(
         cur,
-        """INSERT INTO job_listings (employer_name, job_title, job_url, department, location, ats_platform)
+        """INSERT INTO job_listings
+               (employer_name, job_title, job_url, department, location, ats_platform,
+                posted_at, is_remote, employment_type, salary_min, salary_max, description)
            VALUES %s
-           ON CONFLICT (employer_name, job_url) DO UPDATE
+           ON CONFLICT (job_url) DO UPDATE
            SET job_title=EXCLUDED.job_title, department=EXCLUDED.department,
-               location=EXCLUDED.location, scraped_at=NOW()""",
+               location=EXCLUDED.location, posted_at=EXCLUDED.posted_at,
+               is_remote=EXCLUDED.is_remote, employment_type=EXCLUDED.employment_type,
+               salary_min=EXCLUDED.salary_min, salary_max=EXCLUDED.salary_max,
+               description=EXCLUDED.description, scraped_at=NOW()""",
         rows,
     )
     raw.commit()
     raw.close()
+
+
+def mark_ats_inactive(employer_name: str, ats_platform: str):
+    """Mark a company+platform combo as inactive (404/dead URL)."""
+    conn = get_connection()
+    conn.execute(
+        "UPDATE company_ats SET is_active = FALSE WHERE employer_name = %s AND ats_platform = %s",
+        (employer_name, ats_platform),
+    )
+    conn.commit()
+    conn.close()
 
 
 def search_job_listings(
